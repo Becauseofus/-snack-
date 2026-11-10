@@ -448,6 +448,12 @@ export class GameApp extends Component {
         for (const spec of chrome.labels) {
             used.add(spec.id);
             const label = this.ensureLabel(spec);
+            const wrap = this.labelWrap(label);
+            const parent = spec.parent === 'field' ? this.fieldNode! : this.node;
+            if (wrap.parent !== parent) {
+                parent.addChild(wrap);
+            }
+            wrap.setSiblingIndex(parent.children.length - 1);
             label.string = spec.text;
             label.color = hexColor(spec.color);
             label.isBold = spec.bold;
@@ -460,11 +466,12 @@ export class GameApp extends Component {
             const height = spec.size + 8;
             label.fontSize = Math.max(8, Math.round(spec.size * ps));
             label.lineHeight = label.fontSize + Math.round(4 * ps);
-            // 系统字体的锚点会停在中心。按对齐方式把盒子中心挪开，左缘或右缘才落在排版坐标上。
-            // 贴图像素按物理分辨率加采样，节点再缩回去，逻辑字号不变。
+            // SHRINK 会改文字节点自己的缩放。加采样的缩放放在外层，避免标题被缩成一小块。
             ui.setAnchorPoint(0.5, 0.5);
             ui.setContentSize(width * ps, height * ps);
-            label.node.setScale(1 / ps, 1 / ps, 1);
+            label.node.setScale(1, 1, 1);
+            label.node.setPosition(0, 0, 0);
+            wrap.setScale(1 / ps, 1 / ps, 1);
             let x = spec.parent === 'field' ? spec.x : spec.x - W / 2;
             const y = spec.parent === 'field' ? spec.y : spec.y - H / 2;
             if (spec.align === 'left') {
@@ -472,19 +479,35 @@ export class GameApp extends Component {
             } else if (spec.align === 'right') {
                 x -= width / 2;
             }
-            label.node.setPosition(x, y, 0);
+            wrap.setPosition(x, y, 0);
+            wrap.active = true;
             label.node.active = true;
         }
         for (const [id, label] of this.labels) {
             if (!used.has(id)) {
                 label.node.active = false;
+                const wrap = label.node.parent;
+                if (wrap) {
+                    wrap.active = false;
+                }
             }
         }
     }
 
+    private labelWrap(label: Label): Node {
+        const node = label.node;
+        const current = node.parent;
+        if (current && current.name === `${node.name}-wrap`) {
+            return current;
+        }
+        const wrap = uiNode(`${node.name}-wrap`);
+        wrap.addChild(node);
+        node.setPosition(0, 0, 0);
+        return wrap;
+    }
+
     private ensureLabel(spec: LabelSpec): Label {
         let label = this.labels.get(spec.id);
-        const parent = spec.parent === 'field' ? this.fieldNode! : this.node;
         if (!label) {
             const node = uiNode(spec.id);
             label = node.addComponent(Label);
@@ -495,10 +518,6 @@ export class GameApp extends Component {
             node.addComponent(UITransform);
             this.labels.set(spec.id, label);
         }
-        if (label.node.parent !== parent) {
-            parent.addChild(label.node);
-        }
-        label.node.setSiblingIndex(parent.children.length - 1);
         return label;
     }
 
@@ -524,7 +543,10 @@ export class GameApp extends Component {
             if (textUi) {
                 textUi.setContentSize(Math.max(8, spec.w - 8) * ps, spec.h * ps);
             }
-            view.label.node.setScale(1 / ps, 1 / ps, 1);
+            const textWrap = this.buttonTextWrap(view);
+            textWrap.setScale(1 / ps, 1 / ps, 1);
+            view.label.node.setScale(1, 1, 1);
+            view.label.node.setPosition(0, 0, 0);
             view.label.isBold = true;
             view.label.color = hexColor(spec.enabled && (spec.selected || spec.primary) ? '#ffffff' : spec.enabled ? '#cbbbe8' : '#8d7eae');
             const g = view.gfx;
@@ -570,6 +592,7 @@ export class GameApp extends Component {
         textUi.setAnchorPoint(0.5, 0.5);
         textUi.setContentSize(spec.w - 8, spec.h);
         const made: ButtonView = { root, gfx, label, ui, handler: () => undefined };
+        this.buttonTextWrap(made);
         root.on(Node.EventType.TOUCH_START, (event: EventTouch) => {
             event.propagationStopped = true;
         }, this);
@@ -581,6 +604,19 @@ export class GameApp extends Component {
         }, this);
         this.buttons.set(spec.id, made);
         return made;
+    }
+
+    private buttonTextWrap(view: ButtonView): Node {
+        const text = view.label.node;
+        const current = text.parent;
+        if (current && current.name === 'text-wrap') {
+            return current;
+        }
+        const wrap = uiNode('text-wrap');
+        view.root.addChild(wrap);
+        wrap.addChild(text);
+        text.setPosition(0, 0, 0);
+        return wrap;
     }
 
     private drawSlider(chrome: Chrome, W: number, H: number): void {
