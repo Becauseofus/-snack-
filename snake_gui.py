@@ -801,6 +801,131 @@ def round_path(pts, radius):
     return out
 
 
+# 俯视的蛇头：吻端圆钝、后颊比脖子略宽。锚点在脖子上，+x 朝前，+y 朝左。
+_SNAKE_HEAD_LOCAL = (
+    (1.22, 0.00),
+    (1.08, 0.46),
+    (0.86, 0.78),
+    (0.56, 0.98),
+    (0.24, 1.04),
+    (-0.08, 1.02),
+    (-0.42, 0.98),
+    (-0.42, -0.98),
+    (-0.08, -1.02),
+    (0.24, -1.04),
+    (0.56, -0.98),
+    (0.86, -0.78),
+    (1.08, -0.46),
+)
+
+
+def _head_rim(pts, dx, dy):
+    """丢掉贴着脖子的那一段，只留下吻端和两颊的轮廓。"""
+    if len(pts) < 4:
+        return list(pts)
+    projs = [p[0] * dx + p[1] * dy for p in pts]
+    lo, hi = min(projs), max(projs)
+    limit = lo + (hi - lo) * 0.20
+    rear = [proj <= limit for proj in projs]
+    if not any(rear) or all(rear):
+        return list(pts)
+    start = rear.index(True)
+    seq = pts[start:] + pts[:start]
+    flags = rear[start:] + rear[:start]
+    while flags and flags[0]:
+        flags.pop(0)
+        seq.pop(0)
+    while flags and flags[-1]:
+        flags.pop()
+        seq.pop()
+    return seq
+
+
+def _chaikin_closed(pts, iterations=2):
+    pts = list(pts)
+    for _ in range(iterations):
+        nxt = []
+        n = len(pts)
+        for i in range(n):
+            x0, y0 = pts[i]
+            x1, y1 = pts[(i + 1) % n]
+            nxt.append((0.75 * x0 + 0.25 * x1, 0.75 * y0 + 0.25 * y1))
+            nxt.append((0.25 * x0 + 0.75 * x1, 0.25 * y0 + 0.75 * y1))
+        pts = nxt
+    return pts
+
+
+def _resample_path(pts, step):
+    if len(pts) < 2:
+        return list(pts)
+    step = max(1.0, float(step))
+    out = [pts[0]]
+    acc = 0.0
+    for i in range(1, len(pts)):
+        x0, y0 = pts[i - 1]
+        x1, y1 = pts[i]
+        # 沿原始折线走，避免把已经收下的点再吃掉
+        remain = math.hypot(x1 - x0, y1 - y0)
+        if remain < 1e-6:
+            continue
+        walked = 0.0
+        while acc + (remain - walked) >= step:
+            walked += step - acc
+            t = walked / remain
+            out.append((x0 + (x1 - x0) * t, y0 + (y1 - y0) * t))
+            acc = 0.0
+        acc += remain - walked
+    if math.hypot(out[-1][0] - pts[-1][0], out[-1][1] - pts[-1][1]) > 0.8:
+        out.append(pts[-1])
+    return out
+
+
+def _oriented_frames(pts):
+    """每个点的切线指向尾巴，法线在切线左侧，并且沿身子连续，不会突然翻面。"""
+    n = len(pts)
+    raw = []
+    for i in range(n):
+        if i == 0:
+            vx, vy = pts[1][0] - pts[0][0], pts[1][1] - pts[0][1]
+        elif i == n - 1:
+            vx, vy = pts[-1][0] - pts[-2][0], pts[-1][1] - pts[-2][1]
+        else:
+            vx, vy = pts[i + 1][0] - pts[i - 1][0], pts[i + 1][1] - pts[i - 1][1]
+        length = math.hypot(vx, vy) or 1.0
+        tx, ty = vx / length, vy / length
+        raw.append([pts[i][0], pts[i][1], tx, ty, -ty, tx])
+    for i in range(1, n):
+        if raw[i][4] * raw[i - 1][4] + raw[i][5] * raw[i - 1][5] < 0:
+            raw[i][4] *= -1
+            raw[i][5] *= -1
+    return [tuple(row) for row in raw]
+
+
+def _snake_halfwidth(t, base):
+    """t 从 0（颈）到 1（尾尖）。后段收到一个点。"""
+    half = base * 0.50
+    if t < 0.74:
+        return half * (0.96 + 0.04 * math.sin(t * math.pi))
+    u = (t - 0.74) / 0.26
+    u = u * u * (3.0 - 2.0 * u)
+    return half * (1.0 - u)
+
+
+def _cumdist(pts):
+    dist = [0.0]
+    for i in range(1, len(pts)):
+        dist.append(dist[-1] + math.hypot(pts[i][0] - pts[i - 1][0], pts[i][1] - pts[i - 1][1]))
+    return dist
+
+
+def _ribbon_sides(frames, halfs):
+    left, right = [], []
+    for (x, y, _tx, _ty, nx, ny), half in zip(frames, halfs):
+        left.append((x + nx * half, y + ny * half))
+        right.append((x - nx * half, y - ny * half))
+    return left, right
+
+
 def _round_points(x1, y1, x2, y2, r, n=5):
     r = max(2, min(r, (x2 - x1) / 2, (y2 - y1) / 2))
     centers = [
@@ -2059,116 +2184,202 @@ class SnakeApp:
             return 1.0
         return 1.0 + 0.16 * (self.happy / 0.28)
 
+    def _poly(self, pts, **kwargs):
+        if len(pts) < 3:
+            return
+        flat = [coord for p in pts for coord in p]
+        kwargs.setdefault("tags", "dyn")
+        self.canvas.create_polygon(*flat, **kwargs)
+
     def _paint_body(self, pts, cell):
         if len(pts) < 2:
             return
         limit = cell * 1.75
-        runs = []
+        base = max(10.0, cell * 0.70)
         for run in _split_runs(pts, limit):
             if len(run) < 2:
                 continue
-            runs.append(round_path(run, cell * 0.55))
-        base = max(10, int(cell * 0.72))
-        # 先描边再填色。拐角事先收成圆弧，不用整段样条，避免身子甩出格子。
-        for run in runs:
-            flat = [v for p in run for v in p]
-            self.canvas.create_line(
-                *flat, fill=OUTLINE, width=base + 6,
-                capstyle="round", joinstyle="round", tags="dyn",
-            )
-        seg_index = 0
-        total = sum(len(r) - 1 for r in runs)
-        for run in runs:
-            for i in range(len(run) - 1):
-                t = seg_index / max(1, total - 1)
-                col = mix_hex(BODY_A, BODY_B, t)
-                tail_from_end = total - seg_index
-                width = base
-                if tail_from_end <= 4:
-                    width = max(base * 0.42, base * (0.42 + 0.58 * tail_from_end / 4))
+            # 拐角先收成圆弧，身子仍然贴着格子，不会被样条甩出去。
+            curved = round_path(run, cell * 0.55)
+            curved = _resample_path(curved, max(4.0, cell * 0.16))
+            self._paint_ribbon(curved, base, cell)
+
+    def _paint_ribbon(self, run, base, cell):
+        frames = _oriented_frames(run)
+        if len(frames) < 2:
+            return
+        dist = _cumdist(run)
+        total = dist[-1]
+        if total < 1:
+            return
+        max_half = base * 0.50
+        if total < cell * 1.6:
+            halfs = [max_half * 0.96] * len(frames)
+        else:
+            halfs = [_snake_halfwidth(d / total, base) for d in dist]
+        extra = max(2.2, cell * 0.065)
+        outline_halfs = [h + extra * (h / max_half) for h in halfs]
+        left_o, right_o = _ribbon_sides(frames, outline_halfs)
+        self._poly(left_o + right_o[::-1], fill=OUTLINE, outline="")
+        left, right = _ribbon_sides(frames, halfs)
+        for i in range(len(frames) - 1):
+            t = ((dist[i] + dist[i + 1]) * 0.5) / total
+            col = mix_hex(BODY_A, BODY_B, t)
+            self._poly([left[i], left[i + 1], right[i + 1], right[i]], fill=col, outline="")
+            self._paint_tone_bands(left[i], right[i], left[i + 1], right[i + 1], col)
+        self._paint_scales(frames, halfs, dist, total, cell, base)
+
+    def _paint_tone_bands(self, left0, right0, left1, right1, base_col):
+        # 背略深、腹略浅，都还在同一条身子上，不分成两截。
+        if left0[1] + left1[1] <= right0[1] + right1[1]:
+            high0, high1, low0, low1 = left0, left1, right0, right1
+        else:
+            high0, high1, low0, low1 = right0, right1, left0, left1
+
+        def mixp(a, b, k):
+            return (a[0] * (1 - k) + b[0] * k, a[1] * (1 - k) + b[1] * k)
+
+        back = mix_hex(base_col, BODY_B, 0.20)
+        belly = mix_hex(base_col, "#f3fff8", 0.34)
+        self._poly(
+            [high0, high1, mixp(high1, low1, 0.42), mixp(high0, low0, 0.42)],
+            fill=back, outline="",
+        )
+        self._poly(
+            [mixp(low0, high0, 0.36), mixp(low1, high1, 0.36), low1, low0],
+            fill=belly, outline="",
+        )
+
+    def _paint_scales(self, frames, halfs, dist, total, cell, base):
+        spacing = max(8.0, cell * 0.58)
+        cursor = spacing * 0.7
+        index = 0
+        while cursor < total * 0.90:
+            while index < len(dist) - 2 and dist[index + 1] < cursor:
+                index += 1
+            span = dist[index + 1] - dist[index]
+            u = 0.0 if span < 1e-6 else (cursor - dist[index]) / span
+            u = max(0.0, min(1.0, u))
+            f0, f1 = frames[index], frames[index + 1]
+            x = f0[0] + (f1[0] - f0[0]) * u
+            y = f0[1] + (f1[1] - f0[1]) * u
+            tx = f0[2] + (f1[2] - f0[2]) * u
+            ty = f0[3] + (f1[3] - f0[3]) * u
+            nx = f0[4] + (f1[4] - f0[4]) * u
+            ny = f0[5] + (f1[5] - f0[5]) * u
+            tlen = math.hypot(tx, ty) or 1.0
+            nlen = math.hypot(nx, ny) or 1.0
+            tx, ty = tx / tlen, ty / tlen
+            nx, ny = nx / nlen, ny / nlen
+            half = halfs[index] * (1 - u) + halfs[index + 1] * u
+            if half >= base * 0.16:
+                left = (x + nx * half, y + ny * half)
+                right = (x - nx * half, y - ny * half)
+                high = left if left[1] <= right[1] else right
+                low = right if high is left else left
+                cx = high[0] * 0.72 + low[0] * 0.28
+                cy = high[1] * 0.72 + low[1] * 0.28
+                vx, vy = high[0] - low[0], high[1] - low[1]
+                vlen = math.hypot(vx, vy) or 1.0
+                vx, vy = vx / vlen, vy / vlen
+                reach = half * 0.34
+                bow = half * 0.16
+                a = (cx - vx * reach, cy - vy * reach)
+                mid = (cx + tx * bow, cy + ty * bow)
+                b = (cx + vx * reach, cy + vy * reach)
+                t = cursor / total
+                col = mix_hex(mix_hex(BODY_A, BODY_B, t), BODY_B, 0.55)
                 self.canvas.create_line(
-                    run[i][0], run[i][1], run[i + 1][0], run[i + 1][1],
-                    fill=col, width=width, capstyle="round", joinstyle="round", tags="dyn",
+                    *a, *mid, *b, smooth=True, splinesteps=8,
+                    fill=col, width=max(1, int(cell / 26)),
+                    capstyle="round", tags="dyn",
                 )
-                seg_index += 1
-        # 高光：偏左上的一条细线，像光滑的身子
-        for run in runs:
-            if len(run) < 3:
-                gloss = run
-            else:
-                gloss = run[:-2]
-            if len(gloss) < 2:
-                continue
-            ox, oy = -base * 0.12, -base * 0.20
-            flat = []
-            for x, y in gloss:
-                flat.extend((x + ox, y + oy))
-            self.canvas.create_line(
-                *flat, fill="#e9fff6", width=max(2, base // 5),
-                capstyle="round", joinstyle="round", tags="dyn",
-            )
+            cursor += spacing
 
     def _paint_head(self, x, y, face, glance, cell, mood, blink, pulse):
         dx, dy = face
+        mag = math.hypot(dx, dy) or 1.0
+        dx, dy = dx / mag, dy / mag
         gx, gy = glance
-        r = cell * 0.58 * pulse
-        c = self.canvas
-        c.create_oval(x - r, y - r, x + r, y + r, fill=HEAD, outline=OUTLINE, width=max(2, cell // 16), tags="dyn")
-        # 脑后小芽，画在圆的外侧，才不会被脑袋盖住
-        bx = x - dx * r * 1.18
-        by = y - dy * r * 1.18
-        sx = x - dx * r * 0.78
-        sy = y - dy * r * 0.78
-        c.create_line(sx, sy, bx, by, fill="#2f8f55", width=max(2, cell // 14), tags="dyn")
-        c.create_oval(bx - cell * 0.16, by - cell * 0.10, bx + cell * 0.05, by + cell * 0.12, fill="#8dff9a", outline="", tags="dyn")
-        c.create_oval(bx - cell * 0.02, by - cell * 0.18, bx + cell * 0.16, by + cell * 0.02, fill="#d8ffc4", outline="", tags="dyn")
-        # 头顶高光
-        c.create_oval(
-            x - r * 0.55, y - r * 0.68, x + r * 0.02, y - r * 0.12,
-            fill=HEAD_HI, outline="", tags="dyn",
-        )
-        px, py = -dy, dx  # 脸的左右
-        eyes = [
-            (dx * 0.16 + px * 0.28, dy * 0.16 + py * 0.28),
-            (dx * 0.16 - px * 0.28, dy * 0.16 - py * 0.28),
-        ]
-        er = cell * 0.175
-        for ox, oy in eyes:
-            ex, ey = x + ox * cell * 0.85, y + oy * cell * 0.85
-            if mood == "dead":
-                s = er * 0.85
-                c.create_line(ex - s, ey - s, ex + s, ey + s, fill=OUTLINE, width=max(2, cell // 16), tags="dyn")
-                c.create_line(ex + s, ey - s, ex - s, ey + s, fill=OUTLINE, width=max(2, cell // 16), tags="dyn")
-                continue
-            eh = er * (0.18 if blink else 1.05)
-            c.create_oval(ex - er, ey - eh, ex + er, ey + eh, fill="white", outline=OUTLINE, width=1, tags="dyn")
-            if blink:
-                continue
-            # 眼珠看向即将转弯的方向
-            sx = dx * 0.18 + gx * 0.42
-            sy = dy * 0.18 + gy * 0.42
-            pr = er * 0.52
-            qx, qy = ex + sx * er * 0.7, ey + sy * er * 0.7
-            c.create_oval(qx - pr, qy - pr, qx + pr, qy + pr, fill="#1b1430", outline="", tags="dyn")
-            c.create_oval(qx - pr * 0.55, qy - pr * 0.7, qx - pr * 0.05, qy - pr * 0.15, fill="white", outline="", tags="dyn")
-        # 腮红
-        cheek_r = cell * 0.09 * (1.25 if self.happy > 0 else 1.0)
-        for sign in (-1, 1):
-            chx = x + px * sign * r * 0.72 + dx * r * 0.05
-            chy = y + py * sign * r * 0.72 + dy * r * 0.05
-            c.create_oval(chx - cheek_r, chy - cheek_r * 0.65, chx + cheek_r, chy + cheek_r * 0.65, fill="#ff8fb8", outline="", tags="dyn")
-        # 嘴跟着脸的朝向，而不是永远朝下
-        if mood != "dead":
-            span = cell * (0.20 if self.happy > 0 else 0.15)
-            mx = x + dx * r * 0.58
-            my = y + dy * r * 0.58
-            left = (mx - px * span, my - py * span)
-            right = (mx + px * span, my + py * span)
-            dip = (mx + dx * span * 0.55, my + dy * span * 0.55)
-            c.create_line(
-                *left, *dip, *right, smooth=True,
-                fill=OUTLINE, width=max(2, cell // 14), capstyle="round", tags="dyn",
+        gmag = math.hypot(gx, gy) or 1.0
+        gx, gy = gx / gmag, gy / gmag
+        px, py = -dy, dx
+        half_w = cell * 0.43 * pulse
+        length = cell * 0.96 * pulse
+        local = []
+        for fx, fy in _SNAKE_HEAD_LOCAL:
+            local.append((
+                x + dx * fx * length + px * fy * half_w,
+                y + dy * fx * length + py * fy * half_w,
+            ))
+        head_pts = _chaikin_closed(local, 2)
+        # 后颈不描边，让脑袋盖住身子的断面，轮廓只沿吻和两颊走。
+        self._poly(head_pts, fill=HEAD, outline="")
+        rim = _head_rim(head_pts, dx, dy)
+        if len(rim) >= 2:
+            self.canvas.create_line(
+                *[coord for p in rim for coord in p],
+                fill=OUTLINE, width=max(2, int(cell / 16)),
+                capstyle="round", joinstyle="round", smooth=False, tags="dyn",
             )
+        for side in (1, -1):
+            ex = x + dx * length * 0.50 + px * side * half_w * 0.62 + gx * cell * 0.012
+            ey = y + dy * length * 0.50 + py * side * half_w * 0.62 + gy * cell * 0.012
+            self._paint_snake_eye(ex, ey, cell, blink, mood == "dead")
+        if mood != "dead":
+            self._paint_tongue(x, y, dx, dy, px, py, length)
+
+    def _paint_snake_eye(self, ex, ey, cell, blink, dead):
+        # 竖瞳：眼眶略高，瞳孔在屏幕上保持竖直，不画白眼仁。
+        ew = cell * 0.058
+        eh = cell * 0.092
+        if blink and not dead:
+            eh *= 0.22
+        oval = []
+        steps = 14
+        for i in range(steps):
+            ang = 2 * math.pi * i / steps
+            oval.append((ex + math.cos(ang) * ew, ey + math.sin(ang) * eh))
+        self._poly(oval, fill="#10261c", outline=OUTLINE, width=1)
+        if dead:
+            self.canvas.create_line(
+                ex - ew * 0.8, ey, ex + ew * 0.8, ey,
+                fill="#d5ffe8", width=max(1, int(cell / 22)), capstyle="round", tags="dyn",
+            )
+            return
+        if blink:
+            return
+        slit = eh * 0.78
+        self.canvas.create_line(
+            ex, ey - slit, ex, ey + slit,
+            fill=GOLD, width=max(1, int(round(cell / 30))), capstyle="round", tags="dyn",
+        )
+
+    def _tongue_amount(self):
+        phase = self.clock % 2.6
+        start, end = 0.90, 1.38
+        if phase < start or phase > end:
+            return 0.0
+        u = (phase - start) / (end - start)
+        return math.sin(u * math.pi)
+
+    def _paint_tongue(self, x, y, dx, dy, px, py, length):
+        amount = self._tongue_amount()
+        if amount < 0.04:
+            return
+        sx = x + dx * 1.16 * length
+        sy = y + dy * 1.16 * length
+        reach = length * 0.42 * amount
+        fork = length * 0.13 * amount
+        mx = sx + dx * reach * 0.62
+        my = sy + dy * reach * 0.62
+        tip_l = (sx + dx * reach + px * fork, sy + dy * reach + py * fork)
+        tip_r = (sx + dx * reach - px * fork, sy + dy * reach - py * fork)
+        width = max(1, int(length / 16))
+        color = "#e23d6e"
+        self.canvas.create_line(sx, sy, mx, my, fill=color, width=width, capstyle="round", tags="dyn")
+        self.canvas.create_line(mx, my, *tip_l, fill=color, width=width, capstyle="round", tags="dyn")
+        self.canvas.create_line(mx, my, *tip_r, fill=color, width=width, capstyle="round", tags="dyn")
 
     def _draw_foods(self, ox, oy):
         world = self.world
