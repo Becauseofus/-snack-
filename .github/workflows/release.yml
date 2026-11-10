@@ -1,0 +1,61 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "要发布的 tag，例如 v1.0.0"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  windows-release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up 64-bit Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          architecture: x64
+
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+
+      - name: Build Windows installer
+        env:
+          PYTHONUTF8: "1"
+          PYTHONIOENCODING: utf-8
+        run: python -X utf8 build_installer.py
+
+      - name: Copy assets to ASCII names
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
+          Copy-Item -LiteralPath "dist/贪吃蛇安装程序.exe" -Destination "release-assets/AnimeSnake-Setup-win64.exe"
+          Copy-Item -LiteralPath "dist/贪吃蛇.exe" -Destination "release-assets/AnimeSnake-win64-portable.exe"
+          Get-ChildItem release-assets | Select-Object Name, Length | Format-Table -AutoSize
+
+      - name: Publish GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          name: 动漫贪吃蛇 ${{ github.event_name == 'workflow_dispatch' && inputs.tag || github.ref_name }}
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/AnimeSnake-Setup-win64.exe
+            release-assets/AnimeSnake-win64-portable.exe
+          body: |
+            Windows 64 位构建。
+
+            - `AnimeSnake-Setup-win64.exe`：安装向导（对应 `dist/贪吃蛇安装程序.exe`）
+            - `AnimeSnake-win64-portable.exe`：免安装，直接运行（对应 `dist/贪吃蛇.exe`）
