@@ -45,6 +45,7 @@ function Assert-Replaced([string]$Path, [string]$Before, [string]$After, [string
 
 $includes = @"
 #include <algorithm>
+#include <cstdio>
 #include <fstream>
 #include <sstream>
 #include <string>
@@ -172,6 +173,22 @@ foreach ($file in $bindFiles) {
     }
     Write-Norm $file.FullName $text
     Write-Host "patched jsb $($file.FullName)"
+}
+
+$managerFiles = @(Get-EngineFiles "SystemWindowManager.cpp")
+if (-not $managerFiles) { throw "SystemWindowManager.cpp was not found" }
+foreach ($file in $managerFiles) {
+    $text = Read-Norm $file.FullName
+    if (-not $text.Contains("snakeFlushDisplay();")) {
+        $anchor = "void SystemWindowManager::processEvent() {"
+        if (-not $text.Contains($anchor)) { throw "processEvent anchor missing in $($file.FullName)" }
+        $text = $text.Replace($anchor, "void snakeFlushDisplay(); // SNAKE_DISPLAY_PATCH`n" + $anchor + "`n    snakeFlushDisplay(); // SNAKE_DISPLAY_PATCH")
+    }
+    if ($text.Contains("CC_ASSERT(window);") -and -not $text.Contains("SNAKE_DISPLAY_PATCH null-window")) {
+        $text = $text.Replace("CC_ASSERT(window);", "if (!window) { continue; } // SNAKE_DISPLAY_PATCH null-window")
+    }
+    Write-Norm $file.FullName $text
+    Write-Host "patched SystemWindowManager $($file.FullName)"
 }
 
 exit 0

@@ -166,6 +166,7 @@ if (Test-Path $boot) { Remove-Item $boot -Force }
 Set-Content -Path (Join-Path $InstallDir "snake-smoke.txt") -Value "1" -Encoding ascii
 $process = $null
 try {
+    $env:ANGLE_DEFAULT_PLATFORM = "warp"
     $process = Start-Process -FilePath $exe -WorkingDirectory $InstallDir -PassThru
     $deadline = (Get-Date).AddSeconds(50)
     while ((Get-Date) -lt $deadline -and $process.MainWindowHandle -eq [IntPtr]::Zero) {

@@ -1237,17 +1237,22 @@ export class GameApp extends Component {
             }
             return;
         }
-        const raw = call('set', Math.trunc(width), Math.trunc(height), fullscreen ? 1 : 0);
-        const native = parseNativeDisplay(raw) ?? this.readNative();
+        call('set', Math.trunc(width), Math.trunc(height), fullscreen ? 1 : 0);
+        const native = this.readNative();
         if (native) {
             this.nativeInfo = native;
-            this.rememberNative(native);
-            if (!fullscreen && (native.width !== width || native.height !== height) && width > 0) {
-                this.save.display.width = width;
-                this.save.display.height = height;
-                this.persist();
-            }
         }
+        // 窗口变化要等下一帧的事件循环才真正执行，这里记下玩家选的尺寸。
+        if (fullscreen) {
+            this.save.display.mode = 'fullscreen';
+        } else {
+            this.save.display.mode = 'window';
+        }
+        if (width >= 640 && height >= 360) {
+            this.save.display.width = Math.trunc(width);
+            this.save.display.height = Math.trunc(height);
+        }
+        this.persist();
     }
 
     private applySavedDisplay(): void {
