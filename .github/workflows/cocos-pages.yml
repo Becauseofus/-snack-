@@ -1,0 +1,42 @@
+name: Cocos Pages
+
+# github-pages 环境只允许 main 部署。这个文件必须在默认分支上，
+# 由 workflow_run 在 main 的上下文里把 cocos-creator 的 web-mobile 产物发出去。
+
+on:
+  workflow_run:
+    workflows: ["Cocos Creator"]
+    types: [completed]
+    branches:
+      - cocos-creator
+      - main
+
+permissions:
+  actions: read
+  pages: write
+  id-token: write
+
+jobs:
+  deploy-pages:
+    if: github.event.workflow_run.conclusion != 'cancelled'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Download web-mobile artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: web-mobile
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+          path: web-mobile
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: web-mobile
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
