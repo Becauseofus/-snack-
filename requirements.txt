@@ -1,0 +1,5 @@
+# 游戏运行只需要 Python 标准库（含 tkinter）。
+# 下面这个依赖只在 Windows 上打包安装程序时使用：
+#   python -m pip install -r requirements.txt
+#   python build_installer.py
+pyinstaller>=6.0
