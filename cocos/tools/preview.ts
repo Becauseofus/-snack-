@@ -34,6 +34,12 @@ const model: UiModel = {
     mobile: false,
     scoreHot: false,
     confirmClear: false,
+    displayOpen: false,
+    displayChoices: [],
+    displayMode: 'window',
+    displayWidth: 1280,
+    displayHeight: 720,
+    displayLine: '逻辑 1280×720 · 渲染 1280×720 窗口',
 };
 
 let chrome = layoutChrome(W, H, model, 1.2);

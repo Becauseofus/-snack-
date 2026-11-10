@@ -167,6 +167,8 @@ jobs:
           Write-Host "Project files:"
           Get-ChildItem $proj -Name | Write-Host
           $cmake = "C:\cocos-creator-3.8.6\resources\tools\cmake\bin\cmake.exe"
+          & "$PWD\cocos\tools\patch-win-display.ps1"
+          if ($LASTEXITCODE -ne 0) { throw "Windows display patch failed: $LASTEXITCODE" }
           & $cmake --build $proj --config Release --parallel 2
           if ($LASTEXITCODE -ne 0) { throw "cmake --build failed: $LASTEXITCODE" }
           $exe = Get-ChildItem -Path "cocos\build\windows" -Recurse -Filter "Snake.exe" |
@@ -225,6 +227,16 @@ jobs:
           if ($setup.Length -lt 1000000) { throw "Installer is unexpectedly small: $($setup.Length)" }
           $setup | Select-Object FullName, Length
 
+      - name: Smoke test installed game
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          & "$PWD\cocos\tools\smoke-win.ps1" `
+            -Setup (Resolve-Path "release-assets\Snake-cocos-Setup-win64.exe").Path `
+            -InstallDir "$env:RUNNER_TEMP\snake-smoke" `
+            -OutDir (Join-Path (Resolve-Path "release-assets").Path "smoke")
+          if ($LASTEXITCODE -ne 0) { throw "Windows smoke test failed: $LASTEXITCODE" }
+
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
@@ -232,6 +244,7 @@ jobs:
           path: |
             release-assets/Snake-cocos-win64.zip
             release-assets/Snake-cocos-Setup-win64.exe
+            release-assets/smoke/**
           if-no-files-found: error
 
       - name: Publish release asset

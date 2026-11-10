@@ -18,6 +18,7 @@ import {
     Node,
     ResolutionPolicy,
     resources,
+    screen,
     sys,
     UIOpacity,
     UITransform,
@@ -43,6 +44,7 @@ import {
     type SaveData,
 } from './logic/config';
 import { FX } from './logic/fx';
+import { displayStatus, parseNativeDisplay, pickSavedWindow, windowChoices, type NativeDisplay } from './logic/display';
 import { layoutChrome, type ButtonSpec, type Chrome, type LabelSpec, type UiModel } from './logic/layout';
 import { cellCenter, paintField, type DrawCmd } from './logic/paint';
 import { SnakeWorld, type WorldEvent } from './logic/SnakeWorld';
@@ -173,14 +175,23 @@ export class GameApp extends Component {
     private fieldBase = { x: 0, y: 0 };
     private grid = { cell: 32, rows: 14, cols: 20, w: 640, h: 448 };
     private built = false;
+    private displayOpen = false;
+    private nativeInfo: NativeDisplay | null = null;
+    private smokeStep = 0;
 
     onLoad(): void {
         this.save = this.loadSave();
         this.tones.enabled = this.save.sound;
         this.soundAvailable = toneAvailable();
         this.node.layer = Layers.Enum.UI_2D;
+        // 逻辑画布固定 1280×720。窗口像素和全屏分辨率另外走显示设置，文字按这个比例加采样。
         view.setDesignResolutionSize(1280, 720, ResolutionPolicy.SHOW_ALL);
         view.resizeWithBrowserSize(true);
+        this.nativeInfo = this.readNative();
+        this.applySavedDisplay();
+        if (this.nativeInfo?.smoke) {
+            this.smokeStep = 1;
+        }
         this.audio = this.node.addComponent(AudioSource);
         if (sys.isNative) {
             this.loadClips();
@@ -212,7 +223,8 @@ export class GameApp extends Component {
             this.scoreHot = Math.max(0, this.scoreHot - step);
         }
         this.advanceTongue(step);
-        const modal = this.help || this.historyOpen;
+        const modal = this.help || this.historyOpen || this.displayOpen;
+        this.stepSmoke();
         const world = this.world;
         if (this.phase === 'playing' && !modal && world) {
             this.acc += step;
@@ -287,6 +299,10 @@ export class GameApp extends Component {
         if (W < 32 || H < 32) {
             return;
         }
+        const latest = this.readNative();
+        if (latest) {
+            this.nativeInfo = latest;
+        }
         const chrome = layoutChrome(W, H, this.model(W, H), this.clock);
         this.placeField(chrome, W, H);
         this.drawField(chrome);
@@ -343,6 +359,12 @@ export class GameApp extends Component {
             mobile,
             scoreHot: this.scoreHot > 0,
             confirmClear: this.confirmClear,
+            displayOpen: this.displayOpen,
+            displayChoices: this.displayChoices(),
+            displayMode: this.nativeInfo ? (this.nativeInfo.fullscreen ? 'fullscreen' : 'window') : screen.fullScreen() ? 'fullscreen' : 'window',
+            displayWidth: this.nativeInfo?.width || this.save.display.width,
+            displayHeight: this.nativeInfo?.height || this.save.display.height,
+            displayLine: displayStatus(this.nativeInfo, W, H),
         };
     }
 
@@ -427,19 +449,22 @@ export class GameApp extends Component {
             used.add(spec.id);
             const label = this.ensureLabel(spec);
             label.string = spec.text;
-            label.fontSize = spec.size;
-            label.lineHeight = spec.size + 4;
             label.color = hexColor(spec.color);
             label.isBold = spec.bold;
             label.horizontalAlign = spec.align === 'left' ? Label.HorizontalAlign.LEFT : spec.align === 'right' ? Label.HorizontalAlign.RIGHT : Label.HorizontalAlign.CENTER;
             label.overflow = Label.Overflow.SHRINK;
             label.enableWrapText = false;
             const ui = label.node.getComponent(UITransform)!;
+            const ps = this.pixelScale();
             const width = Math.max(8, spec.w);
             const height = spec.size + 8;
+            label.fontSize = Math.max(8, Math.round(spec.size * ps));
+            label.lineHeight = label.fontSize + Math.round(4 * ps);
             // 系统字体的锚点会停在中心。按对齐方式把盒子中心挪开，左缘或右缘才落在排版坐标上。
+            // 贴图像素按物理分辨率加采样，节点再缩回去，逻辑字号不变。
             ui.setAnchorPoint(0.5, 0.5);
-            ui.setContentSize(width, height);
+            ui.setContentSize(width * ps, height * ps);
+            label.node.setScale(1 / ps, 1 / ps, 1);
             let x = spec.parent === 'field' ? spec.x : spec.x - W / 2;
             const y = spec.parent === 'field' ? spec.y : spec.y - H / 2;
             if (spec.align === 'left') {
@@ -492,7 +517,14 @@ export class GameApp extends Component {
             view.root.setPosition(x, y, 0);
             view.root.active = true;
             view.label.string = spec.text;
-            view.label.fontSize = 14;
+            const ps = this.pixelScale();
+            view.label.fontSize = Math.max(10, Math.round(14 * ps));
+            view.label.lineHeight = view.label.fontSize + Math.round(4 * ps);
+            const textUi = view.label.node.getComponent(UITransform);
+            if (textUi) {
+                textUi.setContentSize(Math.max(8, spec.w - 8) * ps, spec.h * ps);
+            }
+            view.label.node.setScale(1 / ps, 1 / ps, 1);
             view.label.isBold = true;
             view.label.color = hexColor(spec.enabled && (spec.selected || spec.primary) ? '#ffffff' : spec.enabled ? '#cbbbe8' : '#8d7eae');
             const g = view.gfx;
@@ -599,7 +631,7 @@ export class GameApp extends Component {
     private onSwipeEnd = (event: EventTouch): void => {
         const start = this.swipeStart;
         this.swipeStart = null;
-        if (!start || this.phase !== 'playing' || this.help || this.historyOpen || !this.world) {
+        if (!start || this.phase !== 'playing' || this.help || this.historyOpen || this.displayOpen || !this.world) {
             return;
         }
         const end = event.getUILocation();
@@ -648,6 +680,18 @@ export class GameApp extends Component {
             this.toggleHelp();
             return;
         }
+        if (id === 'display' || id === 'close-display') {
+            this.displayOpen = id === 'display' ? !this.displayOpen : false;
+            if (this.displayOpen) {
+                this.help = false;
+                this.historyOpen = false;
+            }
+            return;
+        }
+        if (id === 'display-window' || id === 'display-full' || id.startsWith('res-')) {
+            this.chooseDisplay(id);
+            return;
+        }
         if (id === 'quit') {
             this.quit();
             return;
@@ -656,6 +700,7 @@ export class GameApp extends Component {
             this.historyOpen = !this.historyOpen;
             this.confirmClear = false;
             this.help = false;
+            this.displayOpen = false;
             return;
         }
         if (id === 'close-history') {
@@ -694,7 +739,7 @@ export class GameApp extends Component {
             return;
         }
         if (key === KeyCode.F11) {
-            this.toggleFullscreen();
+            this.onFullscreenKey();
             return;
         }
         if (this.help && (key === KeyCode.ESCAPE || key === KeyCode.SPACE || key === KeyCode.KEY_P || key === KeyCode.ENTER || key === KeyCode.NUM_ENTER)) {
@@ -735,7 +780,7 @@ export class GameApp extends Component {
             return;
         }
         const dir = this.dirOf(key);
-        if (dir && this.phase === 'playing' && !this.help && !this.historyOpen && this.world?.alive) {
+        if (dir && this.phase === 'playing' && !this.help && !this.historyOpen && !this.displayOpen && this.world?.alive) {
             this.world.turn(dir[0], dir[1]);
         }
     };
@@ -777,6 +822,7 @@ export class GameApp extends Component {
         this.phase = 'playing';
         this.help = false;
         this.historyOpen = false;
+        this.displayOpen = false;
         this.acc = 0;
         this.recorded = false;
         this.victory = false;
@@ -802,6 +848,7 @@ export class GameApp extends Component {
         this.help = !this.help;
         if (this.help) {
             this.historyOpen = false;
+            this.displayOpen = false;
             this.play('pause');
         }
     }
@@ -830,6 +877,10 @@ export class GameApp extends Component {
     private onEscape(): void {
         if (this.help) {
             this.help = false;
+            return;
+        }
+        if (this.displayOpen) {
+            this.displayOpen = false;
             return;
         }
         if (this.historyOpen) {
@@ -1074,32 +1125,181 @@ export class GameApp extends Component {
             addEventListener?: (type: string, fn: (ev: { code?: string; preventDefault: () => void }) => void, opts?: boolean) => void;
         };
         target.addEventListener?.('keydown', (ev) => {
-            if (ev.code === 'Space' || ev.code === 'ArrowUp' || ev.code === 'ArrowDown' || ev.code === 'ArrowLeft' || ev.code === 'ArrowRight') {
+            if (ev.code === 'Space' || ev.code === 'F11' || ev.code === 'ArrowUp' || ev.code === 'ArrowDown' || ev.code === 'ArrowLeft' || ev.code === 'ArrowRight') {
                 ev.preventDefault();
             }
         });
     }
 
     private isFullscreen(): boolean {
+        const native = this.readNative();
+        if (native) {
+            this.nativeInfo = native;
+            return native.fullscreen;
+        }
+        if (screen.fullScreen()) {
+            return true;
+        }
         const doc = (globalThis as unknown as { document?: { fullscreenElement?: unknown } }).document;
         return Boolean(doc && doc.fullscreenElement);
     }
 
-    private toggleFullscreen(): void {
-        const doc = (globalThis as unknown as {
-            document?: {
-                fullscreenElement?: unknown;
-                documentElement?: { requestFullscreen?: () => void };
-                exitFullscreen?: () => void;
-            };
-        }).document;
-        if (!doc) {
+    private onFullscreenKey(): void {
+        const native = this.readNative();
+        if (native) {
+            // Windows 上 F11 已由原生层切换，并在切完后把键盘焦点还回窗口。这里只记下结果。
+            this.nativeInfo = native;
+            this.rememberNative(native);
             return;
         }
-        if (!doc.fullscreenElement) {
-            doc.documentElement?.requestFullscreen?.();
+        this.toggleBrowserFullscreen();
+    }
+
+    private toggleFullscreen(): void {
+        if (this.readNative()) {
+            const choice = this.preferredChoice();
+            this.commitDisplay(choice.width, choice.height, !this.isFullscreen());
+            return;
+        }
+        this.toggleBrowserFullscreen();
+    }
+
+    private toggleBrowserFullscreen(): void {
+        const enter = !this.isFullscreen();
+        const pending = enter ? screen.requestFullScreen() : screen.exitFullScreen();
+        Promise.resolve(pending).then(() => this.focusGame()).catch(() => this.focusGame());
+    }
+
+    private focusGame(): void {
+        const doc = (globalThis as unknown as { document?: { getElementById?: (id: string) => { focus?: () => void } | null } }).document;
+        doc?.getElementById?.('GameCanvas')?.focus?.();
+    }
+
+    private pixelScale(): number {
+        const scale = view.getScaleY();
+        if (!Number.isFinite(scale) || scale <= 1.05) {
+            return 1;
+        }
+        return Math.min(3, scale);
+    }
+
+    private bridge(): { snakeDisplay?: (op: string, w?: number, h?: number, full?: number) => string } | null {
+        const host = globalThis as unknown as { jsb?: { snakeDisplay?: (op: string, w?: number, h?: number, full?: number) => string } };
+        return host.jsb?.snakeDisplay ? host.jsb : null;
+    }
+
+    private readNative(): NativeDisplay | null {
+        const raw = this.bridge()?.snakeDisplay?.('state', 0, 0, 0);
+        if (!raw) {
+            return null;
+        }
+        return parseNativeDisplay(raw);
+    }
+
+    private displayChoices() {
+        const info = this.nativeInfo;
+        if (!info || info.workW < 640 || info.workH < 360) {
+            return [];
+        }
+        return windowChoices({ workW: info.workW, workH: info.workH, screenW: info.screenW, screenH: info.screenH });
+    }
+
+    private preferredChoice(): { width: number; height: number } {
+        const choices = this.displayChoices();
+        const saved = this.save.display;
+        const picked = pickSavedWindow(saved.width || this.nativeInfo?.width || 1280, saved.height || this.nativeInfo?.height || 720, choices);
+        if (picked) {
+            return picked;
+        }
+        return { width: this.nativeInfo?.width || 1280, height: this.nativeInfo?.height || 720 };
+    }
+
+    private rememberNative(native: NativeDisplay): void {
+        if (native.fullscreen) {
+            this.save.display.mode = 'fullscreen';
         } else {
-            doc.exitFullscreen?.();
+            this.save.display.mode = 'window';
+            if (native.width > 0 && native.height > 0) {
+                this.save.display.width = native.width;
+                this.save.display.height = native.height;
+            }
+        }
+        this.persist();
+    }
+
+    private commitDisplay(width: number, height: number, fullscreen: boolean): void {
+        const call = this.bridge()?.snakeDisplay;
+        if (!call) {
+            if (fullscreen) {
+                this.toggleBrowserFullscreen();
+            } else if (this.isFullscreen()) {
+                this.toggleBrowserFullscreen();
+            }
+            return;
+        }
+        const raw = call('set', Math.trunc(width), Math.trunc(height), fullscreen ? 1 : 0);
+        const native = parseNativeDisplay(raw) ?? this.readNative();
+        if (native) {
+            this.nativeInfo = native;
+            this.rememberNative(native);
+            if (!fullscreen && (native.width !== width || native.height !== height) && width > 0) {
+                this.save.display.width = width;
+                this.save.display.height = height;
+                this.persist();
+            }
+        }
+    }
+
+    private applySavedDisplay(): void {
+        const info = this.nativeInfo;
+        if (!info) {
+            return;
+        }
+        const saved = this.save.display;
+        if (saved.mode === 'fullscreen') {
+            const choice = this.preferredChoice();
+            this.commitDisplay(choice.width, choice.height, true);
+            return;
+        }
+        if (saved.width >= 640 && saved.height >= 360) {
+            const choice = this.preferredChoice();
+            if (choice.width !== info.width || choice.height !== info.height || info.fullscreen) {
+                this.commitDisplay(choice.width, choice.height, false);
+            }
+        } else {
+            this.rememberNative(info);
+        }
+    }
+
+    private chooseDisplay(id: string): void {
+        if (id === 'display-full') {
+            const choice = this.preferredChoice();
+            this.commitDisplay(choice.width, choice.height, true);
+            return;
+        }
+        if (id === 'display-window') {
+            const choice = this.preferredChoice();
+            this.commitDisplay(choice.width, choice.height, false);
+            return;
+        }
+        const choice = this.displayChoices().find((item) => id === `res-${item.id}`);
+        if (choice) {
+            this.commitDisplay(choice.width, choice.height, false);
+        }
+    }
+
+    private stepSmoke(): void {
+        if (this.smokeStep === 1 && this.clock > 1) {
+            this.smokeStep = 2;
+            this.displayOpen = true;
+            const choice = this.displayChoices().find((item) => item.width === 1280 && item.height === 720) ?? this.preferredChoice();
+            this.commitDisplay(choice.width, choice.height, false);
+            this.bridge()?.snakeDisplay?.('mark', choice.width, choice.height, 0);
+        } else if (this.smokeStep === 2 && this.clock > 2.2) {
+            this.smokeStep = 3;
+            const choice = this.preferredChoice();
+            this.commitDisplay(choice.width, choice.height, true);
+            this.bridge()?.snakeDisplay?.('mark', choice.width, choice.height, 1);
         }
     }
 }

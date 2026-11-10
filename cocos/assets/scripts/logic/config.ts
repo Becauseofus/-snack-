@@ -83,6 +83,12 @@ export interface HistoryItem {
     length: number;
 }
 
+export interface DisplaySave {
+    mode: 'window' | 'fullscreen';
+    width: number;
+    height: number;
+}
+
 export interface SaveData {
     best: number;
     best_by_mode: Record<Mode, number>;
@@ -90,6 +96,7 @@ export interface SaveData {
     speed: number;
     mode: Mode;
     sound: boolean;
+    display: DisplaySave;
 }
 
 export function defaultSave(): SaveData {
@@ -100,6 +107,7 @@ export function defaultSave(): SaveData {
         speed: 5,
         mode: 'classic',
         sound: true,
+        display: { mode: 'window', width: 0, height: 0 },
     };
 }
 
@@ -112,6 +120,17 @@ export function sanitizeSave(raw: unknown): SaveData {
     d.best = Number.isFinite(best) ? Math.max(0, Math.trunc(best)) : 0;
     d.mode = (MODES as readonly string[]).includes(String(src.mode)) ? (src.mode as Mode) : 'classic';
     d.sound = src.sound === undefined ? true : Boolean(src.sound);
+    const display = src.display;
+    if (display && typeof display === 'object') {
+        const row = display as Record<string, unknown>;
+        const width = Number(row.width);
+        const height = Number(row.height);
+        d.display = {
+            mode: row.mode === 'fullscreen' ? 'fullscreen' : 'window',
+            width: Number.isFinite(width) ? Math.max(0, Math.trunc(width)) : 0,
+            height: Number.isFinite(height) ? Math.max(0, Math.trunc(height)) : 0,
+        };
+    }
     const modes = src.best_by_mode;
     if (modes && typeof modes === 'object') {
         const bag = modes as Record<string, unknown>;

@@ -20,7 +20,7 @@ Python 版的玩法移植。工程用 Cocos Creator **3.8.6** 建的，3.8 的�
 - 对局中换模式，下一局才生效。
 - 浆果 +10。星果 +30，并且下一格再长一节。时砂慢动作约 4.5 秒。莲灯让接下来三次得分翻倍。
 - 转向最多预存两次，当前这一格走完才换方向。不吃东西时，即将空出来的尾巴那一格可以走进去。
-- 空格 / P 暂停，R 重开，H / F1 帮助，Esc 先关帮助或记录，再退出全屏，否则回标题。N 开关音效。F11 切浏览器全屏。
+- 空格 / P 暂停，R 重开，H / F1 帮助，Esc 先关帮助、显示设置或记录，再退出全屏，否则回标题。N 开关音效。F11 在网页里切浏览器全屏，在 Windows 版里切窗口和全屏，再按一次回到刚才的窗口。底栏「显示」可以选择装得下当前屏幕的分辨率。
 - 结算卡片有本局分数、历史最高、本模式最高、长度。超过历史最高显示「新纪录」，只超过本模式显示「经典新纪录」这类字，卡片描边变成金色。
 - 网页里音效用 Web Audio 合成，没有外部音乐文件。桌面版会优先播 `assets/resources/audio` 里的短 wav。没有音频接口时，开关写成「音效（系统不支持）」。
 
@@ -62,4 +62,4 @@ Windows 包要分两步：上面的命令把 `platform` 换成 `windows`，生�
 
 GitHub Pages 的 Source 需要是 GitHub Actions。这个仓库的 `github-pages` 环境保护规则目前只放行 `main`，从 `cocos-creator` 直接部署会被拒绝。`.github/workflows/cocos-pages.yml` 放在 `main` 上，等 Cocos 工作流跑完后取 `web-mobile` 产物再部署。
 
-Windows 包：`windows-latest` 上的编译器是 Visual Studio 18 2026，没有 VS 2022。编辑器自带的 CMake 认不出它，工作流会换成 runner 的 CMake，并用 `CMAKE_GENERATOR=Visual Studio 18 2026` 生成工程，再 `cmake --build` 出 `Snake.exe`。CMake 4 对 VS 18 可能写出 `.slnx` 而不是 `.sln`，所以不能按解决方案文件名去找。打出来的运行目录会再打两份：`Snake-cocos-win64.zip` 免安装，`Snake-cocos-Setup-win64.exe` 是 Inno Setup 安装向导（自选路径、桌面和开始菜单快捷方式、可卸载）。脚本在 `cocos/tools/snake.iss`。编辑器自带的运行库只有调试版 `vcruntime140_1d.dll`，正式的 `vcruntime140_1.dll` 会从本机 Visual Studio 再拷进去，打包前会核对每个非系统 DLL 依赖都在目录里。
+Windows 包：`windows-latest` 上的编译器是 Visual Studio 18 2026，没有 VS 2022。编辑器自带的 CMake 认不出它，工作流会换成 runner 的 CMake，并用 `CMAKE_GENERATOR=Visual Studio 18 2026` 生成工程，再 `cmake --build` 出 `Snake.exe`。CMake 4 对 VS 18 可能写出 `.slnx` 而不是 `.sln`，所以不能按解决方案文件名去找。打出来的运行目录会再打两份：`Snake-cocos-win64.zip` 免安装，`Snake-cocos-Setup-win64.exe` 是 Inno Setup 安装向导（自选路径、桌面和开始菜单快捷方式、可卸载）。脚本在 `cocos/tools/snake.iss`。编辑器自带的运行库只有调试版 `vcruntime140_1d.dll`，正式的 `vcruntime140_1.dll` 会从本机 Visual Studio 再拷进去，打包前会核对每个非系统 DLL 依赖都在目录里。Windows 版的逻辑画面是 1280×720，窗口像素和全屏分开设置；F11 在原生窗口里切换，并在切回来后把键盘焦点还给游戏。
