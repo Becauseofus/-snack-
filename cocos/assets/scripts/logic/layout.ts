@@ -335,15 +335,17 @@ export function layoutChrome(W: number, H: number, ui: UiModel, clock = 0): Chro
 }
 
 function paintMenu(labels: LabelSpec[], field: FieldRect, ui: UiModel, clock: number): void {
-    const bob = Math.sin(clock * 1.6) * 4;
-    const titleSize = Math.max(28, Math.min(68, field.cell * 1.35));
+    const bob = Math.sin(clock * 1.6) * Math.max(3, field.h * 0.008);
+    const titleSize = Math.round(Math.min(field.h * 0.14, Math.max(42, field.cell * 2)));
+    const subSize = Math.max(16, Math.round(titleSize * 0.38));
+    const goSize = Math.max(18, Math.round(titleSize * 0.48));
     const cx = field.w / 2;
     const y = field.h * 0.7 + bob;
     label(labels, 'menu-shadow', '贪 吃 蛇', cx + 2, y - 3, titleSize, '#2a1248', 'center', true, 'field');
     label(labels, 'menu-title', '贪 吃 蛇', cx, y, titleSize, TEXT, 'center', true, 'field');
-    label(labels, 'menu-sub', '无方格  ·  连续蛇身  ·  三种节奏', cx, y - titleSize * 0.72, Math.max(11, field.cell / 3), MUTED, 'center', false, 'field');
-    label(labels, 'menu-best', `历史最高  ${ui.best}    ·    ${MODE_BLURB[ui.selectedMode]}`, cx, y - titleSize * 1.15, Math.max(11, field.cell / 3), ACCENT, 'center', false, 'field', field.w - 40);
-    label(labels, 'menu-go', '按 Enter 开始', cx, y - titleSize * 1.55, Math.max(12, field.cell / 2.6), TEXT, 'center', true, 'field');
+    label(labels, 'menu-sub', '无方格  ·  连续蛇身  ·  三种节奏', cx, y - titleSize * 0.78, subSize, MUTED, 'center', false, 'field', field.w - 48);
+    label(labels, 'menu-best', `历史最高  ${ui.best}    ·    ${MODE_BLURB[ui.selectedMode]}`, cx, y - titleSize * 1.28, subSize, ACCENT, 'center', false, 'field', field.w - 48);
+    label(labels, 'menu-go', '按 Enter 开始', cx, y - titleSize * 1.78, goSize, TEXT, 'center', true, 'field');
 }
 
 function paintPause(labels: LabelSpec[], overlay: DrawCmd[], field: FieldRect, ui: UiModel): void {

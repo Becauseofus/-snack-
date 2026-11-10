@@ -458,20 +458,20 @@ export class GameApp extends Component {
             label.color = hexColor(spec.color);
             label.isBold = spec.bold;
             label.horizontalAlign = spec.align === 'left' ? Label.HorizontalAlign.LEFT : spec.align === 'right' ? Label.HorizontalAlign.RIGHT : Label.HorizontalAlign.CENTER;
-            label.overflow = Label.Overflow.SHRINK;
+            label.overflow = Label.Overflow.NONE;
             label.enableWrapText = false;
             const ui = label.node.getComponent(UITransform)!;
-            const ps = this.pixelScale();
             const width = Math.max(8, spec.w);
             const height = spec.size + 8;
-            label.fontSize = Math.max(8, Math.round(spec.size * ps));
-            label.lineHeight = label.fontSize + Math.round(4 * ps);
-            // SHRINK 会改文字节点自己的缩放。加采样的缩放放在外层，避免标题被缩成一小块。
+            const applied = this.glyphScale(spec.size);
             ui.setAnchorPoint(0.5, 0.5);
-            ui.setContentSize(width * ps, height * ps);
+            ui.setContentSize(width * applied, height * applied);
+            label.fontSize = Math.max(8, Math.round(spec.size * applied));
+            label.lineHeight = label.fontSize + Math.round(4 * applied);
+            // 系统字体大约超过 64 像素就画不出来。外层只缩回实际画出的倍数，标题保持排版大小。
             label.node.setScale(1, 1, 1);
             label.node.setPosition(0, 0, 0);
-            wrap.setScale(1 / ps, 1 / ps, 1);
+            wrap.setScale(1 / applied, 1 / applied, 1);
             let x = spec.parent === 'field' ? spec.x : spec.x - W / 2;
             const y = spec.parent === 'field' ? spec.y : spec.y - H / 2;
             if (spec.align === 'left') {
@@ -536,15 +536,16 @@ export class GameApp extends Component {
             view.root.setPosition(x, y, 0);
             view.root.active = true;
             view.label.string = spec.text;
-            const ps = this.pixelScale();
-            view.label.fontSize = Math.max(10, Math.round(14 * ps));
-            view.label.lineHeight = view.label.fontSize + Math.round(4 * ps);
+            view.label.overflow = Label.Overflow.NONE;
+            const applied = this.glyphScale(14);
+            view.label.fontSize = Math.max(10, Math.round(14 * applied));
+            view.label.lineHeight = view.label.fontSize + Math.round(4 * applied);
             const textUi = view.label.node.getComponent(UITransform);
             if (textUi) {
-                textUi.setContentSize(Math.max(8, spec.w - 8) * ps, spec.h * ps);
+                textUi.setContentSize(Math.max(8, spec.w - 8) * applied, spec.h * applied);
             }
             const textWrap = this.buttonTextWrap(view);
-            textWrap.setScale(1 / ps, 1 / ps, 1);
+            textWrap.setScale(1 / applied, 1 / applied, 1);
             view.label.node.setScale(1, 1, 1);
             view.label.node.setPosition(0, 0, 0);
             view.label.isBold = true;
@@ -1216,7 +1217,13 @@ export class GameApp extends Component {
         if (!Number.isFinite(scale) || scale <= 1.05) {
             return 1;
         }
-        return Math.min(3, scale);
+        return Math.min(2, scale);
+    }
+
+    private glyphScale(size: number): number {
+        const safe = Math.max(8, size);
+        const fontSize = Math.max(8, Math.min(64, Math.round(safe * this.pixelScale())));
+        return fontSize / safe;
     }
 
     private bridge(): { snakeDisplay?: (op: string, w?: number, h?: number, full?: number) => string } | null {
