@@ -65,10 +65,10 @@ foreach ($file in $sdlFiles) {
         $text = $text.Replace($anchor, $anchor + "`n" + $includes.TrimEnd())
     }
     if ($text -notmatch "SNAKE_DISPLAY_PATCH begin") {
-        $anchor = "SDL_Window *SDLHelper::createWindow(const char *title,"
+        $anchor = "namespace cc {"
         $index = $text.IndexOf($anchor)
-        if ($index -lt 0) { throw "SDLHelper createWindow anchor missing in $($file.FullName)" }
-        $text = $text.Insert($index, $snippet.TrimEnd() + "`r`n`r`n")
+        if ($index -lt 0) { throw "SDLHelper namespace anchor missing in $($file.FullName)" }
+        $text = $text.Insert($index + $anchor.Length, "`n" + $snippet.TrimEnd() + "`n")
     }
     if (-not $text.Contains("snakeNoteWindow(handle)")) {
         $created = $text.IndexOf("SDL_CreateWindow")
@@ -166,8 +166,9 @@ foreach ($file in $bindFiles) {
     }
     if (-not $text.Contains('defineFunction("snakeDisplay"')) {
         $anchor = "se::ScriptEngine::getInstance()->clearException();"
-        if (-not $text.Contains($anchor)) { throw "jsb clearException anchor missing in $($file.FullName)" }
-        $text = $text.Replace($anchor, "__jsbObj->defineFunction(`"snakeDisplay`", _SE(JSB_snakeDisplay)); // SNAKE_DISPLAY_PATCH`n    $anchor")
+        $index = $text.LastIndexOf($anchor)
+        if ($index -lt 0) { throw "jsb clearException anchor missing in $($file.FullName)" }
+        $text = $text.Insert($index, "__jsbObj->defineFunction(`"snakeDisplay`", _SE(JSB_snakeDisplay)); // SNAKE_DISPLAY_PATCH`n    ")
     }
     Write-Norm $file.FullName $text
     Write-Host "patched jsb $($file.FullName)"
