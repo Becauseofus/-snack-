@@ -62,4 +62,4 @@ Windows 包要分两步：上面的命令把 `platform` 换成 `windows`，生�
 
 GitHub Pages 的 Source 需要是 GitHub Actions。这个仓库的 `github-pages` 环境保护规则目前只放行 `main`，从 `cocos-creator` 直接部署会被拒绝。`.github/workflows/cocos-pages.yml` 放在 `main` 上，等 Cocos 工作流跑完后取 `web-mobile` 产物再部署。
 
-Windows 包：`windows-latest` 上的编译器是 Visual Studio 18 2026，没有 VS 2022。编辑器自带的 CMake 认不出它，工作流会换成 runner 的 CMake，并用 `CMAKE_GENERATOR=Visual Studio 18 2026` 生成工程，再 `cmake --build` 出 `Snake.exe`。CMake 4 对 VS 18 可能写出 `.slnx` 而不是 `.sln`，所以不能按解决方案文件名去找。
+Windows 包：`windows-latest` 上的编译器是 Visual Studio 18 2026，没有 VS 2022。编辑器自带的 CMake 认不出它，工作流会换成 runner 的 CMake，并用 `CMAKE_GENERATOR=Visual Studio 18 2026` 生成工程，再 `cmake --build` 出 `Snake.exe`。CMake 4 对 VS 18 可能写出 `.slnx` 而不是 `.sln`，所以不能按解决方案文件名去找。打出来的运行目录会再打两份：`Snake-cocos-win64.zip` 免安装，`Snake-cocos-Setup-win64.exe` 是 Inno Setup 安装向导（自选路径、桌面和开始菜单快捷方式、可卸载）。脚本在 `cocos/tools/snake.iss`。

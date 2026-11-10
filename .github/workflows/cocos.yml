@@ -189,11 +189,36 @@ jobs:
           Get-Item "release-assets\Snake-cocos-win64.zip" | Select-Object FullName, Length
           Get-ChildItem $stage -Name | Write-Host
 
+      - name: Build Inno Setup installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $candidates = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          )
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw "choco install innosetup failed: $LASTEXITCODE" }
+            $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $iscc) { throw "ISCC.exe was not found after installing Inno Setup" }
+          Write-Host "Using $iscc"
+          $stage = (Resolve-Path "release-assets\stage").Path
+          & $iscc "/DStage=$stage" "cocos\tools\snake.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed: $LASTEXITCODE" }
+          $setup = Get-Item "release-assets\Snake-cocos-Setup-win64.exe"
+          if ($setup.Length -lt 1000000) { throw "Installer is unexpectedly small: $($setup.Length)" }
+          $setup | Select-Object FullName, Length
+
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4
         with:
           name: windows-package
-          path: release-assets/Snake-cocos-win64.zip
+          path: |
+            release-assets/Snake-cocos-win64.zip
+            release-assets/Snake-cocos-Setup-win64.exe
           if-no-files-found: error
 
       - name: Publish release asset
@@ -202,9 +227,12 @@ jobs:
         with:
           tag_name: ${{ github.ref_name }}
           name: 贪吃蛇 Cocos ${{ github.ref_name }}
-          files: release-assets/Snake-cocos-win64.zip
+          files: |
+            release-assets/Snake-cocos-win64.zip
+            release-assets/Snake-cocos-Setup-win64.exe
           fail_on_unmatched_files: true
           body: |
             Cocos Creator 3.8 移植的 Windows 64 位包。
 
-            `Snake-cocos-win64.zip` 是 Visual Studio Release 编译产物，解压后运行其中的 exe。
+            - `Snake-cocos-Setup-win64.exe`：安装向导。可选安装路径，创建桌面和开始菜单快捷方式，并带卸载。
+            - `Snake-cocos-win64.zip`：免安装，解压后运行其中的 `Snake.exe`。
