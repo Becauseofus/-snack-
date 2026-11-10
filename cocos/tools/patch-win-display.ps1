@@ -70,46 +70,23 @@ foreach ($file in $sdlFiles) {
         if ($index -lt 0) { throw "SDLHelper createWindow anchor missing in $($file.FullName)" }
         $text = $text.Insert($index, $snippet.TrimEnd() + "`r`n`r`n")
     }
-    $created = @'
-    if (handle == nullptr) {
-        // Display error message
-        CC_LOG_ERROR("Window could not be created! SDL_Error: %s\n", SDL_GetError());
-        return nullptr;
+    if (-not $text.Contains("snakeNoteWindow(handle)")) {
+        $created = $text.IndexOf("SDL_CreateWindow")
+        $ret = if ($created -ge 0) { $text.IndexOf("return handle;", $created) } else { -1 }
+        if ($ret -lt 0) {
+            $sample = if ($created -ge 0) { $text.Substring($created, [Math]::Min(700, $text.Length - $created)) } else { "SDL_CreateWindow not found" }
+            throw "SDL window create anchor missing in $($file.FullName)`n$sample"
+        }
+        $text = $text.Insert($ret, "snakeNoteWindow(handle); // SNAKE_DISPLAY_PATCH`n    snakeLogBoot(handle);`n    ")
     }
-
-    return handle;
-'@
-    $createdNew = @'
-    if (handle == nullptr) {
-        // Display error message
-        CC_LOG_ERROR("Window could not be created! SDL_Error: %s\n", SDL_GetError());
-        return nullptr;
-    }
-
-    snakeNoteWindow(handle); // SNAKE_DISPLAY_PATCH
-    snakeLogBoot(handle);
-    return handle;
-'@
-    if ($text.Contains($created) -and -not $text.Contains("snakeNoteWindow(handle)")) {
-        $text = $text.Replace($created, $createdNew)
-    } elseif (-not $text.Contains("snakeNoteWindow(handle)")) {
-        throw "SDL window create anchor missing in $($file.FullName)"
-    }
-    $key = @'
-        case SDL_KEYDOWN: {
-            const SDL_KeyboardEvent &event = sdlEvent.key;
-'@
-    $keyNew = @'
-        case SDL_KEYDOWN: {
-            const SDL_KeyboardEvent &event = sdlEvent.key;
-            if (event.keysym.sym == SDLK_F11 && !event.repeat) {
-                snakeToggleFullscreen(SDL_GetWindowFromID(event.windowID)); // SNAKE_DISPLAY_PATCH
-            }
-'@
-    if ($text.Contains($key) -and -not $text.Contains("snakeToggleFullscreen(SDL_GetWindowFromID")) {
-        $text = $text.Replace($key, $keyNew)
-    } elseif (-not $text.Contains("snakeToggleFullscreen(SDL_GetWindowFromID")) {
-        throw "SDL keydown anchor missing in $($file.FullName)"
+    if (-not $text.Contains("snakeToggleFullscreen(SDL_GetWindowFromID")) {
+        $keyAt = $text.IndexOf("case SDL_KEYDOWN:")
+        if ($keyAt -lt 0) { throw "SDL keydown anchor missing in $($file.FullName)" }
+        $lineEnd = $text.IndexOf("`n", $keyAt)
+        $nextEnd = $text.IndexOf("`n", $lineEnd + 1)
+        if ($nextEnd -lt 0) { throw "SDL keydown block is truncated in $($file.FullName)" }
+        $hook = "            if (event.keysym.sym == SDLK_F11 && !event.repeat) {`n                snakeToggleFullscreen(SDL_GetWindowFromID(event.windowID)); // SNAKE_DISPLAY_PATCH`n            }`n"
+        $text = $text.Insert($nextEnd + 1, $hook)
     }
     Write-Norm $file.FullName $text
     Write-Host "patched SDLHelper $($file.FullName)"
