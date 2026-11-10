@@ -118,8 +118,10 @@ function Wait-BootLine([string]$Path, [string]$Pattern, [int]$Seconds, [System.D
     $deadline = (Get-Date).AddSeconds($Seconds)
     while ((Get-Date) -lt $deadline) {
         if ($Process.HasExited) {
-            $have = if (Test-Path $Path) { Get-Content -Raw $Path } else { "<no log>" }
-            throw "Snake.exe exited $($Process.ExitCode) while waiting for $Pattern`n$have"
+            $have = if (Test-Path $Path) { Get-Content $Path } else { @("<no log>") }
+            Write-Host "Snake.exe exited $($Process.ExitCode) while waiting for $Pattern"
+            $have | ForEach-Object { Write-Host $_ }
+            throw "Snake.exe exited $($Process.ExitCode) while waiting for $Pattern"
         }
         if (Test-Path $Path) {
             $text = Get-Content -Raw $Path
@@ -127,8 +129,10 @@ function Wait-BootLine([string]$Path, [string]$Pattern, [int]$Seconds, [System.D
         }
         Start-Sleep -Milliseconds 400
     }
-    $have = if (Test-Path $Path) { Get-Content -Raw $Path } else { "<no log>" }
-    throw "Timed out waiting for $Pattern`n$have"
+    $have = if (Test-Path $Path) { Get-Content $Path } else { @("<no log>") }
+    Write-Host "Timed out waiting for $Pattern"
+    $have | ForEach-Object { Write-Host $_ }
+    throw "Timed out waiting for $Pattern"
 }
 
 function Save-WindowShot([IntPtr]$Hwnd, [string]$Path) {
@@ -166,7 +170,7 @@ if (Test-Path $boot) { Remove-Item $boot -Force }
 Set-Content -Path (Join-Path $InstallDir "snake-smoke.txt") -Value "1" -Encoding ascii
 $process = $null
 try {
-    $env:ANGLE_DEFAULT_PLATFORM = "warp"
+    $env:ALSOFT_DRIVERS = "null"
     $process = Start-Process -FilePath $exe -WorkingDirectory $InstallDir -PassThru
     $deadline = (Get-Date).AddSeconds(50)
     while ((Get-Date) -lt $deadline -and $process.MainWindowHandle -eq [IntPtr]::Zero) {

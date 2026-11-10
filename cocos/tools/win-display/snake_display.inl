@@ -41,36 +41,62 @@ void snakeLogLine(const std::string& line) {
 }
 
 #if CC_PLATFORM == CC_PLATFORM_WINDOWS
-LONG WINAPI snakeCrashFilter(EXCEPTION_POINTERS* info) {
-    const DWORD code = (info && info->ExceptionRecord) ? info->ExceptionRecord->ExceptionCode : 0;
-    void* addr = (info && info->ExceptionRecord) ? info->ExceptionRecord->ExceptionAddress : nullptr;
+void snakeLogAddress(const char* label, uintptr_t addr) {
     HMODULE mod = nullptr;
-    if (addr) {
-        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, static_cast<LPCSTR>(addr), &mod);
+    if (addr > 0x10000) {
+        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, reinterpret_cast<LPCSTR>(addr), &mod);
     }
     char modulePath[MAX_PATH] = "?";
     if (mod) {
         GetModuleFileNameA(mod, modulePath, MAX_PATH);
     }
     const auto base = reinterpret_cast<uintptr_t>(mod);
-    const auto ip = reinterpret_cast<uintptr_t>(addr);
-    char line[640];
-    std::snprintf(line, sizeof(line), "crash code=%08lx addr=%p module=%s offset=%llx", static_cast<unsigned long>(code), addr, modulePath, static_cast<unsigned long long>(base ? ip - base : ip));
+    char line[768];
+    std::snprintf(line, sizeof(line), "%s %p %s+%llx", label, reinterpret_cast<void*>(addr), modulePath, static_cast<unsigned long long>(base ? addr - base : addr));
     snakeLogLine(line);
-    void* frames[8] = {};
-    const USHORT count = CaptureStackBackTrace(0, 8, frames, nullptr);
-    for (USHORT i = 0; i < count; ++i) {
-        HMODULE frameMod = nullptr;
-        GetModuleHandleExA(GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT, static_cast<LPCSTR>(frames[i]), &frameMod);
-        char framePath[MAX_PATH] = "?";
-        if (frameMod) {
-            GetModuleFileNameA(frameMod, framePath, MAX_PATH);
-        }
-        const auto frameBase = reinterpret_cast<uintptr_t>(frameMod);
-        const auto frameIp = reinterpret_cast<uintptr_t>(frames[i]);
-        std::snprintf(line, sizeof(line), "frame %u %s+%llx", static_cast<unsigned>(i), framePath, static_cast<unsigned long long>(frameBase ? frameIp - frameBase : frameIp));
-        snakeLogLine(line);
+}
+
+bool snakeReadable(const void* ptr, size_t bytes) {
+    MEMORY_BASIC_INFORMATION info{};
+    if (!VirtualQuery(ptr, &info, sizeof(info)) || info.State != MEM_COMMIT) {
+        return false;
     }
+    if (info.Protect & (PAGE_GUARD | PAGE_NOACCESS)) {
+        return false;
+    }
+    const auto start = reinterpret_cast<uintptr_t>(info.BaseAddress);
+    const auto addr = reinterpret_cast<uintptr_t>(ptr);
+    return addr >= start && addr + bytes <= start + info.RegionSize;
+}
+
+LONG WINAPI snakeCrashFilter(EXCEPTION_POINTERS* info) {
+    const DWORD code = (info && info->ExceptionRecord) ? info->ExceptionRecord->ExceptionCode : 0;
+    char line[256];
+    std::snprintf(line, sizeof(line), "crash code=%08lx", static_cast<unsigned long>(code));
+    snakeLogLine(line);
+#if defined(_M_X64)
+    if (info && info->ContextRecord) {
+        const CONTEXT* ctx = info->ContextRecord;
+        std::snprintf(line, sizeof(line), "regs rip=%llx rsp=%llx rax=%llx rcx=%llx rdx=%llx r8=%llx r9=%llx",
+                      static_cast<unsigned long long>(ctx->Rip), static_cast<unsigned long long>(ctx->Rsp),
+                      static_cast<unsigned long long>(ctx->Rax), static_cast<unsigned long long>(ctx->Rcx),
+                      static_cast<unsigned long long>(ctx->Rdx), static_cast<unsigned long long>(ctx->R8),
+                      static_cast<unsigned long long>(ctx->R9));
+        snakeLogLine(line);
+        snakeLogAddress("rip", static_cast<uintptr_t>(ctx->Rip));
+        for (int i = 0; i < 12; ++i) {
+            const auto* slot = reinterpret_cast<const uintptr_t*>(ctx->Rsp) + i;
+            if (!snakeReadable(slot, sizeof(uintptr_t))) {
+                break;
+            }
+            char label[32];
+            std::snprintf(label, sizeof(label), "stk%d", i);
+            snakeLogAddress(label, *slot);
+        }
+    }
+#else
+    (void)info;
+#endif
     return EXCEPTION_CONTINUE_SEARCH;
 }
 
@@ -323,6 +349,11 @@ void snakePickDefaultWindow(int* width, int* height) {
 
 void snakeFlushDisplay() {
     snakeInstallCrashLog();
+    static bool announced = false;
+    if (!announced) {
+        announced = true;
+        snakeLogLine("loop-enter");
+    }
     if (!gSnakeApply && !gSnakeToggle && !gSnakeMark) {
         return;
     }
