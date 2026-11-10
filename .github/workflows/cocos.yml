@@ -1,0 +1,160 @@
+name: Cocos Creator
+
+# Cocos Creator 3.8.6 的命令行构建在传入 --build 时会调用
+# Editor.Startup.manager(skipLogin = true)，不走 Dashboard 登录。
+# 编辑器 zip 可从官方 CDN 匿名下载。Windows 托管 runner 自带桌面会话，
+# 满足官方文档里「命令行也需要 GUI 环境」这一条。
+# 打开编辑器界面本身仍可能要求 Cocos 账号，或在 Dashboard 启动参数里加 --nologin。
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - cocos-creator
+      - main
+    tags:
+      - "cocos-v*"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: cocos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web-mobile:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Cocos Creator 3.8.6
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $dest = "C:\cocos-creator-3.8.6"
+          if (-not (Test-Path "$dest\CocosCreator.exe")) {
+            $zip = "$env:RUNNER_TEMP\CocosCreator-v3.8.6-win-032501.zip"
+            $url = "https://download.cocos.com/CocosCreator/v3.8.6/CocosCreator-v3.8.6-win-032501.zip"
+            Write-Host "Downloading $url"
+            Invoke-WebRequest -Uri $url -OutFile $zip
+            if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
+            New-Item -ItemType Directory -Force -Path $dest | Out-Null
+            Expand-Archive -Path $zip -DestinationPath $dest
+            Remove-Item $zip
+          }
+          Get-Item "$dest\CocosCreator.exe" | Select-Object FullName, Length
+
+      - name: Build web-mobile
+        shell: cmd
+        run: |
+          setlocal
+          set EXE=C:\cocos-creator-3.8.6\CocosCreator.exe
+          set PROJ=%CD%\cocos
+          "%EXE%" --nologin --project "%PROJ%" --build "platform=web-mobile;debug=false;startScene=7c3e9a10-4b28-4f6d-8a15-2e9d0c6b4f31;outputName=web-mobile;name=Snake;buildPath=project://build"
+          set CODE=%ERRORLEVEL%
+          echo Creator exit code %CODE%
+          if exist "%PROJ%\build\web-mobile\index.html" echo web-mobile index.html ok
+          if "%CODE%"=="36" exit /b 0
+          if "%CODE%"=="0" if exist "%PROJ%\build\web-mobile\index.html" exit /b 0
+          exit /b %CODE%
+
+      - name: Upload web-mobile artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-mobile
+          path: cocos/build/web-mobile
+          if-no-files-found: error
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: cocos/build/web-mobile
+
+  deploy-pages:
+    needs: web-mobile
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 70
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Cocos Creator 3.8.6
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $dest = "C:\cocos-creator-3.8.6"
+          if (-not (Test-Path "$dest\CocosCreator.exe")) {
+            $zip = "$env:RUNNER_TEMP\CocosCreator-v3.8.6-win-032501.zip"
+            $url = "https://download.cocos.com/CocosCreator/v3.8.6/CocosCreator-v3.8.6-win-032501.zip"
+            Invoke-WebRequest -Uri $url -OutFile $zip
+            New-Item -ItemType Directory -Force -Path $dest | Out-Null
+            Expand-Archive -Path $zip -DestinationPath $dest
+            Remove-Item $zip
+          }
+          Get-Item "$dest\CocosCreator.exe" | Select-Object FullName, Length
+
+      - name: Generate Visual Studio project
+        shell: cmd
+        run: |
+          setlocal
+          set EXE=C:\cocos-creator-3.8.6\CocosCreator.exe
+          set PROJ=%CD%\cocos
+          "%EXE%" --nologin --project "%PROJ%" --build "platform=windows;debug=false;startScene=7c3e9a10-4b28-4f6d-8a15-2e9d0c6b4f31;outputName=windows;name=Snake;buildPath=project://build"
+          set CODE=%ERRORLEVEL%
+          echo Creator exit code %CODE%
+          dir /s /b "%PROJ%\build\windows\*.sln"
+          if "%CODE%"=="36" exit /b 0
+          if "%CODE%"=="0" exit /b 0
+          exit /b %CODE%
+
+      - name: Compile Windows package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $sln = Get-ChildItem -Path "cocos\build\windows" -Recurse -Filter *.sln | Select-Object -First 1
+          if (-not $sln) { throw "No Visual Studio solution was generated" }
+          Write-Host "Solution $($sln.FullName)"
+          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe | Select-Object -First 1
+          if (-not $vs) { throw "MSBuild was not found" }
+          & $vs $sln.FullName /p:Configuration=Release /p:Platform=x64 /m
+          if ($LASTEXITCODE -ne 0) { throw "MSBuild failed: $LASTEXITCODE" }
+          $out = Join-Path $sln.DirectoryName "Release"
+          if (-not (Test-Path $out)) { $out = $sln.DirectoryName }
+          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
+          Compress-Archive -Path $out -DestinationPath "release-assets\Snake-cocos-win64.zip" -Force
+          Get-Item "release-assets\Snake-cocos-win64.zip" | Select-Object FullName, Length
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-package
+          path: release-assets/Snake-cocos-win64.zip
+          if-no-files-found: error
+
+      - name: Publish release asset
+        if: startsWith(github.ref, 'refs/tags/cocos-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: 贪吃蛇 Cocos ${{ github.ref_name }}
+          files: release-assets/Snake-cocos-win64.zip
+          fail_on_unmatched_files: true
+          body: |
+            Cocos Creator 3.8 移植的 Windows 64 位包。
+
+            `Snake-cocos-win64.zip` 是 Visual Studio Release 编译产物，解压后运行其中的 exe。
