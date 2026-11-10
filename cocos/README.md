@@ -55,3 +55,11 @@ Windows 包要分两步：上面的命令把 `platform` 换成 `windows`，生�
 - 用 Dashboard 打开工程做编辑、预览。不登录就进不去 Dashboard，除非启动参数写 `--nologin`。
 - 命令行进程仍然要有桌面会话。官方文档写了命令行构建需要 GUI 环境。GitHub 的 `windows-latest` 有桌面会话，所以工作流 `.github/workflows/cocos.yml` 会在那上面试。服务会话（Session 0）里 Electron 起不来，那种机器做不到无人构建。
 - 第一次在本机「生成」Windows 包时，如果本机没有 VS 2022 的 C++ 工作负载，编译会停在这一步。这一步不在编辑器登录里，但必须有本机的编译器。
+
+## 已经在 GitHub Actions 上跑过
+
+`web-mobile` 在 `windows-latest` 上构建成功，退出码 36，没有弹出登录。产物是该次运行的 artifact `web-mobile`。
+
+GitHub Pages 要仓库管理员先打开一次：Settings → Pages → Source 选 GitHub Actions。没打开时部署接口返回 404，不会有网页地址。这是仓库设置，不是 Cocos 账号。
+
+Windows 工程那一步，编辑器自带的 CMake 报了 `could not find any instance of Visual Studio`，没认出 runner 上的 Visual Studio 2022。工作流会在生成工程前换成 runner 自带的较新 CMake，并在 `cocos/tools/build-windows.json` 里指定 `vsVersion` 为 `2022`。编译仍然依赖本机的 MSVC。

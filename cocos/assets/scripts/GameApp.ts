@@ -267,13 +267,23 @@ export class GameApp extends Component {
         this.built = true;
     }
 
+    private viewSize(): { w: number; h: number } {
+        const visible = view.getVisibleSize();
+        if (visible.width > 32 && visible.height > 32) {
+            return { w: visible.width, h: visible.height };
+        }
+        const ui = this.getComponent(UITransform);
+        return {
+            w: ui && ui.contentSize.width > 32 ? ui.contentSize.width : 1280,
+            h: ui && ui.contentSize.height > 32 ? ui.contentSize.height : 720,
+        };
+    }
+
     private refresh = (): void => {
         if (!this.fieldNode || !this.fieldGfx || !this.fieldBlock) {
             return;
         }
-        const ui = this.getComponent(UITransform);
-        const W = ui ? ui.contentSize.width : 1280;
-        const H = ui ? ui.contentSize.height : 720;
+        const { w: W, h: H } = this.viewSize();
         if (W < 32 || H < 32) {
             return;
         }
@@ -753,9 +763,7 @@ export class GameApp extends Component {
             this.save.mode = this.pending;
             this.pending = null;
         }
-        const ui = this.getComponent(UITransform);
-        const W = ui ? ui.contentSize.width : 1280;
-        const H = ui ? ui.contentSize.height : 720;
+        const { w: W, h: H } = this.viewSize();
         const chrome = layoutChrome(W, H, this.model(W, H), this.clock);
         this.world = new SnakeWorld(chrome.field.cols, chrome.field.rows, this.save.mode);
         this.phase = 'playing';

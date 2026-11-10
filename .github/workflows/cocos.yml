@@ -82,6 +82,21 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Create the Pages site when the token is allowed to
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          gh api --method POST -H "Accept: application/vnd.github+json" \
+            "/repos/${{ github.repository }}/pages" \
+            -f build_type=workflow
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            echo "GitHub Pages 还没在这个仓库里打开。需要仓库管理员到 Settings → Pages，Source 选 GitHub Actions。这一步是仓库设置，不是 Cocos 登录。"
+          fi
+          exit 0
+
       - name: Deploy to GitHub Pages
         id: deployment
         uses: actions/deploy-pages@v4
@@ -108,13 +123,30 @@ jobs:
           }
           Get-Item "$dest\CocosCreator.exe" | Select-Object FullName, Length
 
+      - name: Point Creator at the runner CMake
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $cmake = Get-Command cmake -ErrorAction SilentlyContinue
+          if (-not $cmake) { throw "This runner has no CMake on PATH, so the Windows project cannot be generated." }
+          & $cmake.Source --version
+          $srcRoot = Split-Path (Split-Path $cmake.Source -Parent) -Parent
+          if (-not (Test-Path (Join-Path $srcRoot "bin\cmake.exe"))) {
+            $srcRoot = Split-Path $cmake.Source -Parent
+          }
+          $dest = "C:\cocos-creator-3.8.6\resources\tools\cmake"
+          Write-Host "Replacing $dest with $srcRoot"
+          if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
+          Copy-Item -Recurse $srcRoot $dest
+          & "$dest\bin\cmake.exe" --version
+
       - name: Generate Visual Studio project
         shell: cmd
         run: |
           setlocal
           set EXE=C:\cocos-creator-3.8.6\CocosCreator.exe
           set PROJ=%CD%\cocos
-          "%EXE%" --nologin --project "%PROJ%" --build "platform=windows;debug=false;startScene=7c3e9a10-4b28-4f6d-8a15-2e9d0c6b4f31;outputName=windows;name=Snake;buildPath=project://build"
+          "%EXE%" --nologin --project "%PROJ%" --build "configPath=%PROJ%\tools\build-windows.json"
           set CODE=%ERRORLEVEL%
           echo Creator exit code %CODE%
           dir /s /b "%PROJ%\build\windows\*.sln"
