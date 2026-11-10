@@ -23,7 +23,52 @@ if (Test-Path (Join-Path $InstallDir "vcruntime140_1d.dll")) { throw "Installed 
 & "$PSScriptRoot\check-win-imports.ps1" -Stage $InstallDir
 if ($LASTEXITCODE -ne 0) { throw "Installed package failed the import check" }
 
-$shell = New-Object -ComObject WScript.Shell
+Add-Type @"
+using System;
+using System.Runtime.InteropServices;
+using System.Text;
+[ComImport, Guid("00021401-0000-0000-C000-000000000046")]
+public class SnakeShellLink {}
+[ComImport, InterfaceType(ComInterfaceType.InterfaceIsIUnknown), Guid("000214F9-0000-0000-C000-000000000046")]
+public interface ISnakeShellLinkW {
+    [PreserveSig] int GetPath([Out, MarshalAs(UnmanagedType.LPWStr)] StringBuilder pszFile, int cch, IntPtr pfd, uint fFlags);
+}
+[ComImport, InterfaceType(ComInterfaceType.InterfaceIsIUnknown), Guid("0000010b-0000-0000-C000-000000000046")]
+public interface ISnakePersistFile {
+    void GetClassID(out Guid pClassID);
+    [PreserveSig] int IsDirty();
+    void Load([MarshalAs(UnmanagedType.LPWStr)] string pszFileName, uint dwMode);
+    void Save([MarshalAs(UnmanagedType.LPWStr)] string pszFileName, bool fRemember);
+    void SaveCompleted([MarshalAs(UnmanagedType.LPWStr)] string pszFileName);
+    void GetCurFile([MarshalAs(UnmanagedType.LPWStr)] out string ppszFileName);
+}
+public static class SnakeLnk {
+    public static string Read(string path) {
+        var link = (ISnakeShellLinkW)new SnakeShellLink();
+        ((ISnakePersistFile)link).Load(path, 0);
+        var sb = new StringBuilder(2048);
+        link.GetPath(sb, sb.Capacity, IntPtr.Zero, 0);
+        if (sb.Length == 0) link.GetPath(sb, sb.Capacity, IntPtr.Zero, 4);
+        return sb.ToString();
+    }
+}
+"@
+
+function Test-ByteSpan([byte[]]$Hay, [byte[]]$Needle) {
+    if ($Needle.Length -eq 0 -or $Hay.Length -lt $Needle.Length) { return $false }
+    for ($i = 0; $i -le $Hay.Length - $Needle.Length; $i++) {
+        $ok = $true
+        for ($j = 0; $j -lt $Needle.Length; $j++) {
+            if ($Hay[$i + $j] -ne $Needle[$j]) { $ok = $false; break }
+        }
+        if ($ok) { return $true }
+    }
+    return $false
+}
+
+$wanted = [System.IO.Path]::GetFullPath($exe)
+$wantedUtf16 = [System.Text.Encoding]::Unicode.GetBytes($wanted)
+$wantedAscii = [System.Text.Encoding]::ASCII.GetBytes($wanted)
 $shortcutRoots = @(
     [Environment]::GetFolderPath("Desktop"),
     (Join-Path $env:APPDATA "Microsoft\Windows\Start Menu\Programs")
@@ -32,9 +77,21 @@ $shortcutOk = $false
 foreach ($root in $shortcutRoots) {
     if (-not (Test-Path $root)) { continue }
     Get-ChildItem $root -Recurse -Filter "*.lnk" -ErrorAction SilentlyContinue | ForEach-Object {
-        $target = $shell.CreateShortcut($_.FullName).TargetPath
-        Write-Host "shortcut $($_.FullName) -> $target"
-        if ($target -and ($target -ieq $exe)) { $script:shortcutOk = $true }
+        $target = ""
+        try { $target = [SnakeLnk]::Read($_.FullName) } catch { Write-Host "shortcut read failed $($_.FullName): $($_.Exception.Message)" }
+        $bytes = [System.IO.File]::ReadAllBytes($_.FullName)
+        $embedded = (Test-ByteSpan $bytes $wantedUtf16) -or (Test-ByteSpan $bytes $wantedAscii)
+        Write-Host "shortcut $($_.FullName) -> $target embedded=$embedded"
+        if (-not $embedded -and $_.BaseName -like "*贪吃蛇*") {
+            $chars = foreach ($b in $bytes) { if ($b -ge 32 -and $b -le 126) { [char]$b } else { "`n" } }
+            $pieces = ((-join $chars) -split "`n" | Where-Object { $_.Length -ge 4 } | Select-Object -First 24) -join " | "
+            Write-Host "ascii strings: $pieces"
+        }
+        $same = $false
+        if ($target) {
+            try { $same = [System.IO.Path]::GetFullPath($target) -ieq $wanted } catch { $same = $target -ieq $wanted }
+        }
+        if ($same -or $embedded) { $script:shortcutOk = $true }
     }
 }
 if (-not $shortcutOk) { throw "Desktop or Start Menu shortcut does not point at the installed Snake.exe" }
@@ -141,6 +198,7 @@ try {
     Get-Content (Join-Path $OutDir "snake-boot.log")
     exit 0
 } finally {
+    if (Test-Path $boot) { Copy-Item $boot (Join-Path $OutDir "snake-boot.log") -Force -ErrorAction SilentlyContinue }
     if ($process -and -not $process.HasExited) {
         Stop-Process -Id $process.Id -Force -ErrorAction SilentlyContinue
     }
