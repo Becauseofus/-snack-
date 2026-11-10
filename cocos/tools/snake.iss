@@ -4,6 +4,9 @@
 #ifndef Stage
 #define Stage "release-assets\stage"
 #endif
+#ifndef OutDir
+#define OutDir "release-assets"
+#endif
 
 [Setup]
 AppId={{C0C05A4E-3E88-4D91-9E6A-3C8B1D4F2A71}
@@ -13,12 +16,12 @@ AppPublisher=Becauseofus
 DefaultDirName={localappdata}\Programs\贪吃蛇
 DefaultGroupName={#MyAppName}
 DisableProgramGroupPage=no
-OutputDir=release-assets
+OutputDir={#OutDir}
 OutputBaseFilename=Snake-cocos-Setup-win64
 Compression=lzma2
 SolidCompression=yes
-ArchitecturesAllowed=x64
-ArchitecturesInstallIn64BitMode=x64
+ArchitecturesAllowed=x64compatible
+ArchitecturesInstallIn64BitMode=x64compatible
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 UninstallDisplayIcon={app}\{#MyAppExe}

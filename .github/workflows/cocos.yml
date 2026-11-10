@@ -206,9 +206,18 @@ jobs:
           if (-not $iscc) { throw "ISCC.exe was not found after installing Inno Setup" }
           Write-Host "Using $iscc"
           $stage = (Resolve-Path "release-assets\stage").Path
-          & $iscc "/DStage=$stage" "cocos\tools\snake.iss"
+          $out = (Resolve-Path "release-assets").Path
+          & $iscc "/DStage=$stage" "/DOutDir=$out" "cocos\tools\snake.iss"
           if ($LASTEXITCODE -ne 0) { throw "ISCC failed: $LASTEXITCODE" }
-          $setup = Get-Item "release-assets\Snake-cocos-Setup-win64.exe"
+          $setup = Get-ChildItem -Path . -Recurse -Filter "Snake-cocos-Setup-win64.exe" |
+            Where-Object { $_.FullName -notmatch "\\stage\\" } |
+            Select-Object -First 1
+          if (-not $setup) { throw "Installer was not produced" }
+          $dest = Join-Path $out "Snake-cocos-Setup-win64.exe"
+          if ($setup.FullName -ne $dest) {
+            Move-Item -LiteralPath $setup.FullName -Destination $dest -Force
+          }
+          $setup = Get-Item $dest
           if ($setup.Length -lt 1000000) { throw "Installer is unexpectedly small: $($setup.Length)" }
           $setup | Select-Object FullName, Length
 
