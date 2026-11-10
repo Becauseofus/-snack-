@@ -6,6 +6,7 @@ int gSnakeWindowedH = 0;
 bool gSnakeApply = false;
 bool gSnakeToggle = false;
 bool gSnakeMark = false;
+bool gSnakeFull = false;
 int gSnakeApplyW = 0;
 int gSnakeApplyH = 0;
 int gSnakeApplyFull = 0;
@@ -169,6 +170,10 @@ struct SnakeMetrics {
     int awareness = -1;
 };
 
+#if CC_PLATFORM == CC_PLATFORM_WINDOWS
+HWND snakeHwnd(SDL_Window* window);
+#endif
+
 SnakeMetrics snakeMeasure(SDL_Window* window) {
     SnakeMetrics metrics;
     metrics.smoke = snakeSmokeFlag() ? 1 : 0;
@@ -178,6 +183,16 @@ SnakeMetrics snakeMeasure(SDL_Window* window) {
         return metrics;
     }
     SDL_GetWindowSize(window, &metrics.width, &metrics.height);
+#if CC_PLATFORM == CC_PLATFORM_WINDOWS
+    HWND hwnd = snakeHwnd(window);
+    if (hwnd) {
+        RECT client{};
+        if (GetClientRect(hwnd, &client)) {
+            metrics.width = static_cast<int>(client.right - client.left);
+            metrics.height = static_cast<int>(client.bottom - client.top);
+        }
+    }
+#endif
     int index = SDL_GetWindowDisplayIndex(window);
     if (index < 0) {
         index = 0;
@@ -198,10 +213,24 @@ SnakeMetrics snakeMeasure(SDL_Window* window) {
     if (SDL_GetDisplayDPI(index, &ddpi, &hdpi, &vdpi) == 0 && hdpi > 0) {
         metrics.dpi = static_cast<int>(hdpi + 0.5f);
     }
-    const Uint32 flags = SDL_GetWindowFlags(window);
-    metrics.fullscreen = (flags & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP)) ? 1 : 0;
+    metrics.fullscreen = gSnakeFull ? 1 : 0;
     return metrics;
 }
+
+#if CC_PLATFORM == CC_PLATFORM_WINDOWS
+HWND snakeHwnd(SDL_Window* window) {
+    window = snakeResolveWindow(window);
+    if (!window) {
+        return nullptr;
+    }
+    SDL_SysWMinfo info;
+    SDL_VERSION(&info.version);
+    if (!SDL_GetWindowWMInfo(window, &info) || info.subsystem != SDL_SYSWM_WINDOWS) {
+        return nullptr;
+    }
+    return info.info.win.window;
+}
+#endif
 
 std::string snakeJson(const SnakeMetrics& metrics) {
     std::ostringstream out;
@@ -219,79 +248,85 @@ std::string snakeJson(const SnakeMetrics& metrics) {
     return out.str();
 }
 
-void snakeFocus(SDL_Window* window) {
-    if (!window) {
-        return;
-    }
-    snakeLogLine("before-raise");
-    SDL_RaiseWindow(window);
-#if SDL_VERSION_ATLEAST(2, 0, 18)
-    snakeLogLine("before-focus");
-    SDL_SetWindowInputFocus(window);
-#endif
-    snakeLogLine("after-focus");
-}
-
 void snakeApplyWindow(SDL_Window* window, int width, int height, bool fullscreen) {
     snakeLogLine("apply-begin fullscreen=" + std::to_string(fullscreen ? 1 : 0) + " width=" + std::to_string(width) + " height=" + std::to_string(height));
     window = snakeResolveWindow(window);
-    if (!window) {
-        snakeLogLine("apply-failed no-window");
+#if CC_PLATFORM == CC_PLATFORM_WINDOWS
+    HWND hwnd = snakeHwnd(window);
+    if (!hwnd) {
+        snakeLogLine("apply-failed no-hwnd");
         return;
     }
-    int index = SDL_GetWindowDisplayIndex(window);
-    if (index < 0) {
-        index = 0;
-    }
-    SDL_Rect usable{};
-    if (SDL_GetDisplayUsableBounds(index, &usable) != 0 || usable.w <= 0 || usable.h <= 0) {
-        SDL_GetDisplayBounds(index, &usable);
-    }
     if (!fullscreen) {
+        RECT work{};
+        int availW = width;
+        int availH = height;
+        int originX = 0;
+        int originY = 0;
+        if (SystemParametersInfoW(SPI_GETWORKAREA, 0, &work, 0)) {
+            availW = work.right - work.left;
+            availH = work.bottom - work.top;
+            originX = work.left;
+            originY = work.top;
+        }
         if (width < 640) {
             width = 640;
         }
         if (height < 360) {
             height = 360;
         }
-        if (usable.w > 0 && width > usable.w) {
-            width = usable.w;
+        if (availW > 0 && width > availW) {
+            width = availW;
         }
-        if (usable.h > 0 && height > usable.h) {
-            height = usable.h;
+        if (availH > 0 && height > availH) {
+            height = availH;
         }
         width &= ~1;
         height &= ~1;
-        if (SDL_GetWindowFlags(window) & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP)) {
-            SDL_SetWindowFullscreen(window, 0);
-        }
-        snakeLogLine("before-border");
-        SDL_SetWindowBordered(window, SDL_TRUE);
-        snakeLogLine("before-resizable");
-        SDL_SetWindowResizable(window, SDL_TRUE);
-        snakeLogLine("before-size");
-        SDL_SetWindowSize(window, width, height);
-        if (usable.w >= width && usable.h >= height) {
-            const int x = usable.x + std::max(0, (usable.w - width) / 2);
-            const int y = usable.y + std::max(0, (usable.h - height) / 2);
-            SDL_SetWindowPosition(window, x, y);
-        }
+        const LONG_PTR style = WS_OVERLAPPEDWINDOW | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS;
+        snakeLogLine("before-win32-window");
+        SetWindowLongPtrW(hwnd, GWL_STYLE, style);
+        RECT outer{0, 0, width, height};
+        AdjustWindowRectEx(&outer, static_cast<DWORD>(style), FALSE, static_cast<DWORD>(GetWindowLongPtrW(hwnd, GWL_EXSTYLE)));
+        const int outerW = outer.right - outer.left;
+        const int outerH = outer.bottom - outer.top;
+        const int x = originX + std::max(0, (availW - outerW) / 2);
+        const int y = originY + std::max(0, (availH - outerH) / 2);
+        SetWindowPos(hwnd, HWND_NOTOPMOST, x, y, outerW, outerH, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
         gSnakeWindowedW = width;
         gSnakeWindowedH = height;
+        gSnakeFull = false;
     } else {
-        if (!(SDL_GetWindowFlags(window) & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP))) {
-            int currentW = 0;
-            int currentH = 0;
-            SDL_GetWindowSize(window, &currentW, &currentH);
-            if (currentW >= 640 && currentH >= 360) {
-                gSnakeWindowedW = currentW;
-                gSnakeWindowedH = currentH;
+        if (!gSnakeFull && gSnakeWindowedW >= 640 && gSnakeWindowedH >= 360) {
+            // Keep the last windowed client size for the next F11.
+        } else if (!gSnakeFull) {
+            RECT client{};
+            if (GetClientRect(hwnd, &client)) {
+                gSnakeWindowedW = std::max(640, static_cast<int>(client.right - client.left));
+                gSnakeWindowedH = std::max(360, static_cast<int>(client.bottom - client.top));
             }
         }
-        snakeLogLine("before-fullscreen");
-        SDL_SetWindowFullscreen(window, SDL_WINDOW_FULLSCREEN_DESKTOP);
+        HMONITOR monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
+        MONITORINFO monitorInfo{};
+        monitorInfo.cbSize = sizeof(monitorInfo);
+        RECT bounds{0, 0, width, height};
+        if (GetMonitorInfoW(monitor, &monitorInfo)) {
+            bounds = monitorInfo.rcMonitor;
+        }
+        snakeLogLine("before-win32-fullscreen");
+        SetWindowLongPtrW(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE | WS_CLIPCHILDREN | WS_CLIPSIBLINGS);
+        SetWindowPos(hwnd, HWND_TOP, bounds.left, bounds.top, bounds.right - bounds.left, bounds.bottom - bounds.top, SWP_FRAMECHANGED | SWP_SHOWWINDOW);
+        gSnakeFull = true;
     }
-    snakeFocus(window);
+    SetForegroundWindow(hwnd);
+    SetFocus(hwnd);
+#else
+    (void)width;
+    (void)height;
+    (void)fullscreen;
+    snakeLogLine("apply-failed not-windows");
+    return;
+#endif
     const SnakeMetrics metrics = snakeMeasure(window);
     snakeLogLine("applied fullscreen=" + std::to_string(metrics.fullscreen) + " width=" + std::to_string(metrics.width) + " height=" + std::to_string(metrics.height));
 }
@@ -302,7 +337,7 @@ void snakeToggleFullscreen(SDL_Window* window) {
         snakeLogLine("f11-failed no-window");
         return;
     }
-    const bool fullscreen = (SDL_GetWindowFlags(window) & (SDL_WINDOW_FULLSCREEN | SDL_WINDOW_FULLSCREEN_DESKTOP)) != 0;
+    const bool fullscreen = gSnakeFull;
     int width = gSnakeWindowedW;
     int height = gSnakeWindowedH;
     if (width < 640 || height < 360) {
@@ -353,6 +388,16 @@ void snakeFlushDisplay() {
     if (!announced) {
         announced = true;
         snakeLogLine("loop-enter");
+        if (!gSnakeApply && !gSnakeToggle) {
+            int pickW = 1280;
+            int pickH = 720;
+            snakePickDefaultWindow(&pickW, &pickH);
+            gSnakeApply = true;
+            gSnakeApplyW = pickW;
+            gSnakeApplyH = pickH;
+            gSnakeApplyFull = 0;
+            snakeLogLine("queued default " + std::to_string(pickW) + "x" + std::to_string(pickH));
+        }
     }
     if (!gSnakeApply && !gSnakeToggle && !gSnakeMark) {
         return;

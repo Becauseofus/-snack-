@@ -184,7 +184,9 @@ try {
     if ($text -notmatch "awareness=([0-9-]+)") { throw "Boot log has no DPI awareness line`n$text" }
     $awareness = [int]$Matches[1]
     if ($awareness -lt 1) { throw "Process is not DPI-aware (awareness=$awareness)`n$text" }
-    if ($text -match "boot width=800 height=600") { throw "Window is still the 800x600 default`n$text" }
+    $text = Wait-BootLine $boot "loop-enter" 20 $process
+    $text = Wait-BootLine $boot "applied fullscreen=0 width=(\d+) height=(\d+)" 20 $process
+    if ($text -match "applied fullscreen=0 width=800 height=600") { throw "Window stayed at the 800x600 startup size`n$text" }
     $text = Wait-BootLine $boot "mark fullscreen=0 width=(\d+) height=(\d+)" 25 $process
     Start-Sleep -Milliseconds 700
     $process.Refresh()

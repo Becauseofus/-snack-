@@ -93,43 +93,13 @@ foreach ($file in $sdlFiles) {
     Write-Host "patched SDLHelper $($file.FullName)"
 }
 
-$baseFiles = @(Get-EngineFiles "BaseGame.cpp")
-if (-not $baseFiles) { throw "BaseGame.cpp was not found" }
-foreach ($file in $baseFiles) {
-    Assert-Replaced $file.FullName `
-        "int BaseGame::init() {" `
-        "void snakePickDefaultWindow(int* width, int* height); // SNAKE_DISPLAY_PATCH`nint BaseGame::init() {" `
-        "BaseGame declaration"
-    Assert-Replaced $file.FullName `
-        "_windowInfo.width = _windowInfo.width == -1 ? 800 : _windowInfo.width;`n    _windowInfo.height = _windowInfo.height == -1 ? 600 : _windowInfo.height;" `
-        @"
-if (_windowInfo.width == -1 || _windowInfo.height == -1) {
-        int pickW = 1280;
-        int pickH = 720;
-        snakePickDefaultWindow(&pickW, &pickH); // SNAKE_DISPLAY_PATCH
-        if (_windowInfo.width == -1) {
-            _windowInfo.width = pickW;
-        }
-        if (_windowInfo.height == -1) {
-            _windowInfo.height = pickH;
-        }
-    }
-"@ `
-        "BaseGame size"
-}
-
 $platformFiles = @(Get-EngineFiles "WindowsPlatform.cpp")
 if (-not $platformFiles) { throw "WindowsPlatform.cpp was not found" }
 $dpi = @'
 int32_t WindowsPlatform::init() {
     // SNAKE_DISPLAY_PATCH dpi
-    {
-        using SetProcessDpiAwarenessContextFn = BOOL(WINAPI*)(HANDLE);
-        auto setContext = reinterpret_cast<SetProcessDpiAwarenessContextFn>(GetProcAddress(GetModuleHandleW(L"user32.dll"), "SetProcessDpiAwarenessContext"));
-        if (!setContext || !setContext(reinterpret_cast<HANDLE>(static_cast<LONG_PTR>(-4)))) {
-            SetProcessDPIAware();
-        }
-    }
+    // 每显示器 V2 会让这版 SDL 在普通显卡上跳进空函数。系统级 DPI 感知就够让窗口按真实像素绘制。
+    SetProcessDPIAware();
 '@
 foreach ($file in $platformFiles) {
     Assert-Replaced $file.FullName "int32_t WindowsPlatform::init() {" $dpi.TrimEnd() "WindowsPlatform dpi"
