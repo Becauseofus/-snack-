@@ -75,35 +75,8 @@ jobs:
         with:
           path: cocos/build/web-mobile
 
-  allow-pages:
-    runs-on: ubuntu-latest
-    continue-on-error: true
-    permissions:
-      administration: write
-    steps:
-      - name: Allow this ref to deploy GitHub Pages
-        env:
-          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          set +e
-          repo="${{ github.repository }}"
-          ref="${{ github.ref_name }}"
-          if [ "${{ github.ref_type }}" = "tag" ]; then
-            type=tag
-          else
-            type=branch
-          fi
-          echo "Adding deployment branch policy: $type $ref"
-          gh api --method POST -H "Accept: application/vnd.github+json" \
-            "/repos/${repo}/environments/github-pages/deployment-branch-policies" \
-            -f name="$ref" -f type="$type"
-          code=$?
-          echo "policy request exit $code"
-          exit 0
-
   deploy-pages:
-    needs: [web-mobile, allow-pages]
-    if: always() && needs.web-mobile.result == 'success'
+    needs: web-mobile
     runs-on: ubuntu-latest
     environment:
       name: github-pages
