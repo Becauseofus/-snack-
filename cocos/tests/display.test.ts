@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { sanitizeSave } from '../assets/scripts/logic/config';
-import { choiceFits, parseNativeDisplay, pickSavedWindow, windowChoices, type MonitorInfo } from '../assets/scripts/logic/display';
+import { choiceFits, fitWorkArea, parseNativeDisplay, pickSavedWindow, windowChoices, type MonitorInfo } from '../assets/scripts/logic/display';
 import { chromeBoxes, layoutChrome, type UiModel } from '../assets/scripts/logic/layout';
 
 function model(extra: Partial<UiModel> = {}): UiModel {
@@ -83,7 +83,8 @@ function assertInside(W: number, H: number, extra: Partial<UiModel> = {}): void 
 test('window choices stay inside the work area', () => {
     const laptop: MonitorInfo = { workW: 1920, workH: 1040, screenW: 1920, screenH: 1080 };
     const choices = windowChoices(laptop);
-    assert.deepEqual(choices.map((choice) => choice.id), ['960x540', '1280x720', '1600x900']);
+    assert.deepEqual(fitWorkArea(laptop), { width: 1848, height: 1038 });
+    assert.deepEqual(choices.map((choice) => choice.id), ['auto', '960x540', '1280x720', '1600x900']);
     for (const choice of choices) {
         assert.equal(choiceFits(choice.width, choice.height, laptop), true);
     }

@@ -358,21 +358,22 @@ void snakePickDefaultWindow(int* width, int* height) {
         availH = work.bottom - work.top;
     }
 #endif
-    const int candidates[][2] = {{2560, 1440}, {1920, 1080}, {1600, 900}, {1280, 720}, {960, 540}};
-    int pickW = 960;
-    int pickH = 540;
-    bool found = false;
-    for (const auto& candidate : candidates) {
-        if (candidate[0] <= availW && candidate[1] <= availH) {
-            pickW = candidate[0];
-            pickH = candidate[1];
-            found = true;
-            break;
-        }
+    if (availW < 2) {
+        availW = 1280;
     }
-    if (!found) {
-        pickW = std::max(640, std::min(availW, 960));
-        pickH = std::max(360, std::min(availH, 540));
+    if (availH < 2) {
+        availH = 720;
+    }
+    int pickW = availW & ~1;
+    int pickH = (pickW * 9 / 16) & ~1;
+    if (pickH > (availH & ~1)) {
+        pickH = availH & ~1;
+        pickW = (pickH * 16 / 9) & ~1;
+        pickH = (pickW * 9 / 16) & ~1;
+    }
+    if (pickW < 640 || pickH < 360 || pickW > availW || pickH > availH) {
+        pickW = std::max(2, std::min(availW, 960) & ~1);
+        pickH = std::max(2, std::min(availH, 540) & ~1);
     }
     if (width) {
         *width = pickW;

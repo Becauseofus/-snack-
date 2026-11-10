@@ -48,28 +48,36 @@ export function defaultDisplay(): DisplaySave {
     return { mode: 'window', width: 0, height: 0 };
 }
 
+/** 按当前显示器的工作区取最大的偶数 16:9。宽或高为 0 表示还没读到屏幕。 */
+export function fitWorkArea(monitor: MonitorInfo): { width: number; height: number } {
+    const workW = Math.max(0, Math.trunc(monitor.workW));
+    const workH = Math.max(0, Math.trunc(monitor.workH));
+    let width = workW & ~1;
+    let height = Math.floor(width * 9 / 16) & ~1;
+    if (height > (workH & ~1)) {
+        height = workH & ~1;
+        width = Math.floor(height * 16 / 9) & ~1;
+        height = Math.floor(width * 9 / 16) & ~1;
+    }
+    if (width < 640 || height < 360 || width > workW || height > workH) {
+        width = Math.max(2, Math.min(workW, 960) & ~1);
+        height = Math.max(2, Math.min(workH, 540) & ~1);
+    }
+    return { width, height };
+}
+
 export function windowChoices(monitor: MonitorInfo): DisplayChoice[] {
     const workW = Math.trunc(monitor.workW);
     const workH = Math.trunc(monitor.workH);
+    const fit = fitWorkArea(monitor);
     const out: DisplayChoice[] = [];
+    if (fit.width >= 640 && fit.height >= 360 && fit.width <= workW && fit.height <= workH) {
+        out.push({ id: 'auto', width: fit.width, height: fit.height, label: `自动 ${fit.width}×${fit.height}` });
+    }
     for (const [width, height] of WINDOW_PRESETS) {
-        if (width <= workW && height <= workH) {
+        if (width <= workW && height <= workH && !(width === fit.width && height === fit.height)) {
             out.push({ id: `${width}x${height}`, width, height, label: `${width} × ${height}` });
         }
-    }
-    if (out.length || workW < 640 || workH < 360) {
-        return out;
-    }
-    let width = workW;
-    let height = Math.round(width * 9 / 16);
-    if (height > workH) {
-        height = workH;
-        width = Math.round(height * 16 / 9);
-    }
-    width = Math.max(640, width & ~1);
-    height = Math.max(360, height & ~1);
-    if (width <= workW && height <= workH) {
-        out.push({ id: `${width}x${height}`, width, height, label: `${width} × ${height}` });
     }
     return out;
 }

@@ -1207,6 +1207,12 @@ export class GameApp extends Component {
     private preferredChoice(): { width: number; height: number } {
         const choices = this.displayChoices();
         const saved = this.save.display;
+        if (saved.width < 640 || saved.height < 360) {
+            const auto = choices.find((item) => item.id === 'auto') ?? choices[0];
+            if (auto) {
+                return auto;
+            }
+        }
         const picked = pickSavedWindow(saved.width || this.nativeInfo?.width || 1280, saved.height || this.nativeInfo?.height || 720, choices);
         if (picked) {
             return picked;
@@ -1271,8 +1277,6 @@ export class GameApp extends Component {
             if (choice.width !== info.width || choice.height !== info.height || info.fullscreen) {
                 this.commitDisplay(choice.width, choice.height, false);
             }
-        } else {
-            this.rememberNative(info);
         }
     }
 
