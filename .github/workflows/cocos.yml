@@ -185,6 +185,10 @@ jobs:
           }
           if (-not (Test-Path "$stage\Snake.exe")) { throw "Staged package is missing Snake.exe" }
           if (-not (Test-Path "$stage\Resources")) { throw "Resources were not copied next to Snake.exe" }
+          & "$PWD\cocos\tools\stage-win-runtime.ps1" -Stage (Resolve-Path $stage).Path
+          if ($LASTEXITCODE -ne 0) { throw "stage-win-runtime failed: $LASTEXITCODE" }
+          & "$PWD\cocos\tools\check-win-imports.ps1" -Stage (Resolve-Path $stage).Path
+          if ($LASTEXITCODE -ne 0) { throw "Windows import check failed: $LASTEXITCODE" }
           Compress-Archive -Path "$stage\*" -DestinationPath "release-assets\Snake-cocos-win64.zip" -Force
           Get-Item "release-assets\Snake-cocos-win64.zip" | Select-Object FullName, Length
           Get-ChildItem $stage -Name | Write-Host
