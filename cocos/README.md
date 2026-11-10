@@ -60,6 +60,6 @@ Windows 包要分两步：上面的命令把 `platform` 换成 `windows`，生�
 
 `web-mobile` 在 `windows-latest` 上构建成功，退出码 36，没有弹出登录。产物是该次运行的 artifact `web-mobile`。
 
-GitHub Pages 要仓库管理员先打开一次：Settings → Pages → Source 选 GitHub Actions。没打开时部署接口返回 404，不会有网页地址。这是仓库设置，不是 Cocos 账号。
+GitHub Pages 的 Source 需要是 GitHub Actions。这个仓库的 `github-pages` 环境保护规则目前只放行 `main`，从 `cocos-creator` 直接部署会被拒绝。`.github/workflows/cocos-pages.yml` 放在 `main` 上，等 Cocos 工作流跑完后取 `web-mobile` 产物再部署。
 
-Windows 工程那一步，编辑器自带的 CMake 报了 `could not find any instance of Visual Studio`，没认出 runner 上的 Visual Studio 2022。工作流会在生成工程前换成 runner 自带的较新 CMake，并在 `cocos/tools/build-windows.json` 里指定 `vsVersion` 为 `2022`。编译仍然依赖本机的 MSVC。
+Windows 包：`windows-latest` 上的编译器是 Visual Studio 18 2026，没有 VS 2022。编辑器自带的 CMake 认不出它，工作流会换成 runner 的 CMake，并用 `CMAKE_GENERATOR=Visual Studio 18 2026` 生成工程，再 `cmake --build` 出 `Snake.exe`。CMake 4 对 VS 18 可能写出 `.slnx` 而不是 `.sln`，所以不能按解决方案文件名去找。

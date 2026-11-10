@@ -75,8 +75,35 @@ jobs:
         with:
           path: cocos/build/web-mobile
 
+  allow-pages:
+    runs-on: ubuntu-latest
+    continue-on-error: true
+    permissions:
+      administration: write
+    steps:
+      - name: Allow this ref to deploy GitHub Pages
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          repo="${{ github.repository }}"
+          ref="${{ github.ref_name }}"
+          if [ "${{ github.ref_type }}" = "tag" ]; then
+            type=tag
+          else
+            type=branch
+          fi
+          echo "Adding deployment branch policy: $type $ref"
+          gh api --method POST -H "Accept: application/vnd.github+json" \
+            "/repos/${repo}/environments/github-pages/deployment-branch-policies" \
+            -f name="$ref" -f type="$type"
+          code=$?
+          echo "policy request exit $code"
+          exit 0
+
   deploy-pages:
-    needs: web-mobile
+    needs: [web-mobile, allow-pages]
+    if: always() && needs.web-mobile.result == 'success'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -103,7 +130,7 @@ jobs:
 
   windows:
     runs-on: windows-latest
-    timeout-minutes: 70
+    timeout-minutes: 90
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -144,12 +171,16 @@ jobs:
         shell: cmd
         run: |
           setlocal
+          rem windows-latest 现在装的是 Visual Studio 18 2026，没有 VS 2022。
+          rem 编辑器的生成器列表里没有 VS 18，探测失败后会落到 CMake 默认生成器。
+          set CMAKE_GENERATOR=Visual Studio 18 2026
           set EXE=C:\cocos-creator-3.8.6\CocosCreator.exe
           set PROJ=%CD%\cocos
           "%EXE%" --nologin --project "%PROJ%" --build "configPath=%PROJ%\tools\build-windows.json"
           set CODE=%ERRORLEVEL%
           echo Creator exit code %CODE%
-          dir /s /b "%PROJ%\build\windows\*.sln"
+          dir /b "%PROJ%\build\windows\proj"
+          if not exist "%PROJ%\build\windows\proj\CMakeCache.txt" exit /b 1
           if "%CODE%"=="36" exit /b 0
           if "%CODE%"=="0" exit /b 0
           exit /b %CODE%
@@ -158,18 +189,32 @@ jobs:
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $sln = Get-ChildItem -Path "cocos\build\windows" -Recurse -Filter *.sln | Select-Object -First 1
-          if (-not $sln) { throw "No Visual Studio solution was generated" }
-          Write-Host "Solution $($sln.FullName)"
-          $vs = & "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe" -latest -requires Microsoft.Component.MSBuild -find MSBuild\**\Bin\MSBuild.exe | Select-Object -First 1
-          if (-not $vs) { throw "MSBuild was not found" }
-          & $vs $sln.FullName /p:Configuration=Release /p:Platform=x64 /m
-          if ($LASTEXITCODE -ne 0) { throw "MSBuild failed: $LASTEXITCODE" }
-          $out = Join-Path $sln.DirectoryName "Release"
-          if (-not (Test-Path $out)) { $out = $sln.DirectoryName }
-          New-Item -ItemType Directory -Force -Path release-assets | Out-Null
-          Compress-Archive -Path $out -DestinationPath "release-assets\Snake-cocos-win64.zip" -Force
+          $proj = "cocos\build\windows\proj"
+          if (-not (Test-Path "$proj\CMakeCache.txt")) { throw "CMake project was not generated" }
+          Write-Host "Project files:"
+          Get-ChildItem $proj -Name | Write-Host
+          $cmake = "C:\cocos-creator-3.8.6\resources\tools\cmake\bin\cmake.exe"
+          & $cmake --build $proj --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "cmake --build failed: $LASTEXITCODE" }
+          $exe = Get-ChildItem -Path "cocos\build\windows" -Recurse -Filter "Snake.exe" |
+            Where-Object { $_.FullName -match "\\Release\\" } |
+            Select-Object -First 1
+          if (-not $exe) { throw "Snake.exe was not produced" }
+          Write-Host "Executable $($exe.FullName) $($exe.Length)"
+          $release = $exe.DirectoryName
+          $stage = "release-assets\stage"
+          if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Get-ChildItem $release -Force | Where-Object {
+            $_.Extension -notin ".pdb", ".ilk", ".exp", ".lib", ".obj", ".iobj", ".ipdb"
+          } | ForEach-Object {
+            Copy-Item $_.FullName -Destination (Join-Path $stage $_.Name) -Recurse -Force
+          }
+          if (-not (Test-Path "$stage\Snake.exe")) { throw "Staged package is missing Snake.exe" }
+          if (-not (Test-Path "$stage\Resources")) { throw "Resources were not copied next to Snake.exe" }
+          Compress-Archive -Path "$stage\*" -DestinationPath "release-assets\Snake-cocos-win64.zip" -Force
           Get-Item "release-assets\Snake-cocos-win64.zip" | Select-Object FullName, Length
+          Get-ChildItem $stage -Name | Write-Host
 
       - name: Upload Windows artifact
         uses: actions/upload-artifact@v4

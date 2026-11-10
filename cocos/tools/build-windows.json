@@ -23,7 +23,6 @@
     },
     "windows": {
       "targetPlatform": "x64",
-      "vsVersion": "2022",
       "executableName": "Snake"
     }
   }

@@ -435,10 +435,18 @@ export class GameApp extends Component {
             label.overflow = Label.Overflow.SHRINK;
             label.enableWrapText = false;
             const ui = label.node.getComponent(UITransform)!;
-            const ax = spec.align === 'left' ? 0 : spec.align === 'right' ? 1 : 0.5;
-            ui.setAnchorPoint(ax, 0.5);
-            ui.setContentSize(Math.max(8, spec.w), spec.size + 8);
-            const [x, y] = spec.parent === 'field' ? [spec.x, spec.y] : [spec.x - W / 2, spec.y - H / 2];
+            const width = Math.max(8, spec.w);
+            const height = spec.size + 8;
+            // 系统字体的锚点会停在中心。按对齐方式把盒子中心挪开，左缘或右缘才落在排版坐标上。
+            ui.setAnchorPoint(0.5, 0.5);
+            ui.setContentSize(width, height);
+            let x = spec.parent === 'field' ? spec.x : spec.x - W / 2;
+            const y = spec.parent === 'field' ? spec.y : spec.y - H / 2;
+            if (spec.align === 'left') {
+                x += width / 2;
+            } else if (spec.align === 'right') {
+                x -= width / 2;
+            }
             label.node.setPosition(x, y, 0);
             label.node.active = true;
         }
