@@ -1,5 +1,5 @@
 ﻿#define MyAppName "贪吃蛇"
-#define MyAppVersion "1.0.5"
+#define MyAppVersion "1.0.6"
 #define MyAppExe "Snake.exe"
 #ifndef Stage
 #define Stage "release-assets\stage"
