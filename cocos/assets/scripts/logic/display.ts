@@ -9,6 +9,7 @@ export const WINDOW_PRESETS: ReadonlyArray<readonly [number, number]> = [
     [1600, 900],
     [1920, 1080],
     [2560, 1440],
+    [2560, 1600],
 ];
 
 export interface MonitorInfo {
@@ -67,8 +68,9 @@ export function fitWorkArea(monitor: MonitorInfo): { width: number; height: numb
 }
 
 export function windowChoices(monitor: MonitorInfo): DisplayChoice[] {
-    const workW = Math.trunc(monitor.workW);
-    const workH = Math.trunc(monitor.workH);
+    // 允许选到整块屏幕的尺寸（不受任务栏工作区高度限制），否则 2560×1600 会被过滤掉
+    const workW = Math.max(Math.trunc(monitor.workW), Math.trunc(monitor.screenW || 0));
+    const workH = Math.max(Math.trunc(monitor.workH), Math.trunc(monitor.screenH || 0));
     const fit = fitWorkArea(monitor);
     const out: DisplayChoice[] = [];
     if (fit.width >= 640 && fit.height >= 360 && fit.width <= workW && fit.height <= workH) {

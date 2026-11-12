@@ -15,12 +15,12 @@ import {
     KeyCode,
     Label,
     Layers,
+    Mask,
     Node,
     ResolutionPolicy,
     resources,
     screen,
     sys,
-    UIOpacity,
     UITransform,
     Vec2,
     view,
@@ -31,6 +31,7 @@ import {
     CYAN,
     defaultSave,
     GOLD,
+    HISTORY_MAX,
     intervalMs,
     MODE_NAME,
     sanitizeSave,
@@ -39,114 +40,122 @@ import {
     TEXT,
     VIOLET,
     type FoodKind,
-    type HistoryItem,
     type Mode,
     type SaveData,
 } from './logic/config';
 import { FX } from './logic/fx';
-import { displayStatus, parseNativeDisplay, pickSavedWindow, windowChoices, type NativeDisplay } from './logic/display';
-import { layoutChrome, type ButtonSpec, type Chrome, type LabelSpec, type UiModel } from './logic/layout';
-import { cellCenter, paintField, type DrawCmd } from './logic/paint';
+import { displayStatus, parseNativeDisplay, pickSavedWindow, windowChoices, type DisplayChoice, type NativeDisplay } from './logic/display';
+import { layoutChrome, measure, type Chrome, type LabelSpec, type ButtonSpec, type SettingsTab, type UiModel } from './logic/layout';
+import { cellCenter, makeStars, paintBackground, paintField, type DrawCmd, type Star } from './logic/paint';
 import { SnakeWorld, type WorldEvent } from './logic/SnakeWorld';
 import { toneAvailable, Tones } from './logic/tones';
 
 const { ccclass } = _decorator;
 
-type Phase = UiModel['phase'];
+const FONT = 'Microsoft YaHei, PingFang SC, Noto Sans SC, WenQuanYi Micro Hei, sans-serif';
+const SOUND_KEYS = ['eat', 'star', 'slow', 'mult', 'die', 'start', 'pause', 'record'] as const;
+const POPUP_POOL = 6;
+// 速度条已移除，节奏固定；禅意/挑战由模式自行修正
+const GAME_SPEED = 5;
 
-interface ButtonView {
-    root: Node;
-    gfx: Graphics;
-    label: Label;
-    ui: UITransform;
-    handler: () => void;
+const COLOR_CACHE = new Map<string, Color>();
+
+function colorOf(hex: string): Color {
+    let c = COLOR_CACHE.get(hex);
+    if (!c) {
+        const s = hex.replace('#', '');
+        c = new Color(
+            parseInt(s.slice(0, 2), 16),
+            parseInt(s.slice(2, 4), 16),
+            parseInt(s.slice(4, 6), 16),
+            s.length >= 8 ? parseInt(s.slice(6, 8), 16) : 255
+        );
+        COLOR_CACHE.set(hex, c);
+    }
+    return c;
 }
 
-const TONE_NAMES = ['eat', 'star', 'slow', 'mult', 'die', 'start', 'pause', 'record'];
+// 按钮按下时压暗一点（结果缓存成颜色字符串，复用 colorOf 的对象缓存）
+const SHADE_CACHE = new Map<string, string>();
 
-function uiNode(name: string): Node {
+function shade(hex: string, k: number): string {
+    const key = hex + '|' + k;
+    let v = SHADE_CACHE.get(key);
+    if (!v) {
+        const s = hex.replace('#', '');
+        const r = Math.round(parseInt(s.slice(0, 2), 16) * k);
+        const g = Math.round(parseInt(s.slice(2, 4), 16) * k);
+        const b = Math.round(parseInt(s.slice(4, 6), 16) * k);
+        const a = s.length >= 8 ? s.slice(6, 8) : '';
+        v = '#' + [r, g, b].map((n) => n.toString(16).padStart(2, '0')).join('') + a;
+        SHADE_CACHE.set(key, v);
+    }
+    return v;
+}
+
+function makeNode(name: string): Node {
     const node = new Node(name);
     node.layer = Layers.Enum.UI_2D;
     return node;
 }
 
-function hexColor(hex: string): Color {
-    const h = hex.replace('#', '');
-    const r = parseInt(h.slice(0, 2), 16);
-    const g = parseInt(h.slice(2, 4), 16);
-    const b = parseInt(h.slice(4, 6), 16);
-    const a = h.length >= 8 ? parseInt(h.slice(6, 8), 16) : 255;
-    return new Color(r, g, b, a);
+// 标题界面「按任意键开始」时忽略的键：修饰键与系统键不该触发开局
+const NO_START: Record<number, true> = {};
+for (const code of [
+    KeyCode.SHIFT_LEFT,
+    KeyCode.SHIFT_RIGHT,
+    KeyCode.CTRL_LEFT,
+    KeyCode.CTRL_RIGHT,
+    KeyCode.ALT_LEFT,
+    KeyCode.ALT_RIGHT,
+    KeyCode.META_LEFT,
+    KeyCode.META_RIGHT,
+    KeyCode.CAPS_LOCK,
+    KeyCode.ESCAPE,
+]) {
+    if (typeof code === 'number') NO_START[code] = true;
 }
 
-function replay(g: Graphics, cmds: DrawCmd[]): void {
-    g.clear();
-    g.lineJoin = Graphics.LineJoin.ROUND;
-    g.lineCap = Graphics.LineCap.ROUND;
-    for (const c of cmds) {
-        if ((c.op === 'poly' || c.op === 'line') && c.pts && c.pts.length >= 4) {
-            const draw = () => {
-                g.moveTo(c.pts![0], c.pts![1]);
-                for (let i = 2; i < c.pts!.length; i += 2) {
-                    g.lineTo(c.pts![i], c.pts![i + 1]);
-                }
-                if (c.op === 'poly') {
-                    g.close();
-                }
-            };
-            if (c.fill) {
-                g.fillColor = hexColor(c.fill);
-                draw();
-                g.fill();
-            }
-            if (c.stroke || c.op === 'line') {
-                g.strokeColor = hexColor(c.stroke || '#ffffff');
-                g.lineWidth = c.sw ?? 1;
-                draw();
-                g.stroke();
-            }
-        } else if (c.op === 'circle' && c.x !== undefined && c.y !== undefined && c.r !== undefined) {
-            if (c.fill) {
-                g.fillColor = hexColor(c.fill);
-                g.circle(c.x, c.y, c.r);
-                g.fill();
-            }
-            if (c.stroke) {
-                g.strokeColor = hexColor(c.stroke);
-                g.lineWidth = c.sw ?? 1;
-                g.circle(c.x, c.y, c.r);
-                g.stroke();
-            }
-        } else if (c.op === 'ellipse' && c.x !== undefined && c.y !== undefined && c.rx !== undefined && c.ry !== undefined) {
-            if (c.fill) {
-                g.fillColor = hexColor(c.fill);
-                g.ellipse(c.x, c.y, c.rx, c.ry);
-                g.fill();
-            }
-            if (c.stroke) {
-                g.strokeColor = hexColor(c.stroke);
-                g.lineWidth = c.sw ?? 1;
-                g.ellipse(c.x, c.y, c.rx, c.ry);
-                g.stroke();
-            }
-        }
-    }
+interface LabelView {
+    id: string;
+    node: Node;
+    wrap: Node;
+    label: Label;
+    ui: UITransform;
+    last: Record<string, number | string | boolean>;
+}
+
+interface ButtonView {
+    id: string;
+    root: Node;
+    ui: UITransform;
+    gfx: Graphics;
+    wrap: Node;
+    label: Label;
+    ui2: UITransform;
+    spec: ButtonSpec | null;
+    pressed: boolean;
+    enabled: boolean;
+    applied: ButtonSpec | null;
+    handler: () => void;
 }
 
 @ccclass('GameApp')
 export class GameApp extends Component {
     private save: SaveData = defaultSave();
-    private phase: Phase = 'menu';
-    private help = false;
-    private historyOpen = false;
+    private phase: UiModel['phase'] = 'menu';
+    private settingsOpen = false;
+    private settingsTab: SettingsTab = 'display';
     private confirmClear = false;
-    private pending: Mode | null = null;
+    private confirmQuit = false;
+    private pendingMode: Mode | null = null;
     private world: SnakeWorld | null = null;
     private fx = new FX();
     private tones = new Tones();
     private clips = new Map<string, AudioClip>();
     private audio: AudioSource | null = null;
     private soundAvailable = false;
+
     private acc = 0;
     private clock = 0;
     private happy = 0;
@@ -165,125 +174,170 @@ export class GameApp extends Component {
     private tongueWait = 1.2;
     private lastToggle = -1;
     private swipeStart: Vec2 | null = null;
+
+    private built = false;
     private fieldNode: Node | null = null;
-    private fieldGfx: Graphics | null = null;
+    private fieldBg: Graphics | null = null;
+    private fieldDyn: Graphics | null = null;
+    private fieldCards: Graphics | null = null;
     private fieldBlock: Node | null = null;
-    private sliderNode: Node | null = null;
-    private sliderGfx: Graphics | null = null;
-    private labels = new Map<string, Label>();
-    private buttons = new Map<string, ButtonView>();
+    private fieldLabels: Node | null = null;
+    private fieldButtons: Node | null = null;
+    private screenLabels: Node | null = null;
+    private screenButtons: Node | null = null;
+
+    private labelMap = new Map<string, LabelView>();
+    private buttonMap = new Map<string, ButtonView>();
+    private popupPool: LabelView[] = [];
+
     private fieldBase = { x: 0, y: 0 };
     private grid = { cell: 32, rows: 14, cols: 20, w: 640, h: 448 };
-    private built = false;
-    private displayOpen = false;
+    private viewW = 1280;
+    private viewH = 720;
+
+    private layoutCache: { key: string; lay: Chrome | null } = { key: '', lay: null };
+    private appliedLay: Chrome | null = null;
+    private bgKey = '';
+    private stars: Star[] = [];
+
     private nativeInfo: NativeDisplay | null = null;
+    private nativeAt = -10;
+    private displayDirty = true;
+    private displayKey = '';
+    private displaySize = '';
+    private displayLine = '';
+    private displayChoices: DisplayChoice[] = [];
     private smokeStep = 0;
+
+    /* ------------------------------ 生命周期 ------------------------------ */
 
     onLoad(): void {
         this.save = this.loadSave();
+        this.save.speed = GAME_SPEED; // 速度条已移除，统一固定节奏
         this.tones.enabled = this.save.sound;
         this.soundAvailable = toneAvailable();
         this.node.layer = Layers.Enum.UI_2D;
-        // 逻辑画布固定 1280×720。窗口像素和全屏分辨率另外走显示设置，文字按这个比例加采样。
         view.setDesignResolutionSize(1280, 720, ResolutionPolicy.SHOW_ALL);
         view.resizeWithBrowserSize(true);
-        this.nativeInfo = this.readNative();
+
+        this.pollNative(true);
         this.applySavedDisplay();
-        if (this.nativeInfo?.smoke) {
-            this.smokeStep = 1;
-        }
+        if (this.nativeInfo && this.nativeInfo.smoke) this.smokeStep = 1;
+
         this.audio = this.node.addComponent(AudioSource);
-        if (sys.isNative) {
-            this.loadClips();
-        }
+        if (sys.isNative) this.loadClips();
+
         this.ensureNodes();
         input.on(Input.EventType.KEY_DOWN, this.onKey, this);
-        view.on('canvas-resize', this.refresh, this);
+        view.on('canvas-resize', this.onResize, this);
         game.on(Game.EVENT_HIDE, this.onHide, this);
         this.preventBrowserScroll();
     }
 
     onDestroy(): void {
         input.off(Input.EventType.KEY_DOWN, this.onKey, this);
-        view.off('canvas-resize', this.refresh, this);
+        view.off('canvas-resize', this.onResize, this);
         game.off(Game.EVENT_HIDE, this.onHide, this);
         this.persist();
     }
 
+    private onResize = (): void => {
+        this.pollNative(true);
+        this.layoutCache = { key: '', lay: null };
+        this.displayDirty = true;
+    };
+
     update(dt: number): void {
-        const step = Math.min(0.05, Math.max(0, dt));
-        this.clock += step;
-        if (this.happy > 0) {
-            this.happy = Math.max(0, this.happy - step);
-        }
-        if (this.shake > 0) {
-            this.shake = Math.max(0, this.shake - step);
-        }
-        if (this.scoreHot > 0) {
-            this.scoreHot = Math.max(0, this.scoreHot - step);
-        }
-        this.advanceTongue(step);
-        const modal = this.help || this.historyOpen || this.displayOpen;
-        this.stepSmoke();
+        const d = Math.min(0.05, Math.max(0, dt));
+        this.clock += d;
+        if (this.happy > 0) this.happy = Math.max(0, this.happy - d);
+        if (this.shake > 0) this.shake = Math.max(0, this.shake - d);
+        if (this.scoreHot > 0) this.scoreHot = Math.max(0, this.scoreHot - d);
+        this.advanceTongue(d);
+
+        const frozen = this.settingsOpen;
         const world = this.world;
-        if (this.phase === 'playing' && !modal && world) {
-            this.acc += step;
-            const interval = intervalMs(this.save.speed, world.mode, world.eaten, world.slowLeft) / 1000;
-            let steps = 0;
-            while (this.acc >= interval && steps < 4 && this.phase === 'playing') {
+
+        if (this.phase === 'playing' && !frozen && world) {
+            this.acc += d;
+            const interval = intervalMs(GAME_SPEED, world.mode, world.eaten, world.slowLeft) / 1000;
+            let guard = 0;
+            while (this.acc >= interval && guard < 4 && this.phase === 'playing') {
                 this.acc -= interval;
-                const events = world.step();
-                this.onEvents(events);
-                steps += 1;
-                if (this.phase !== 'playing') {
-                    break;
-                }
+                this.onEvents(world.step());
+                guard += 1;
+                if (this.phase !== 'playing') break;
             }
-            if (this.phase === 'playing') {
-                world.tickTime(step);
-            }
+            if (this.phase === 'playing') world.tickTime(d);
         } else if (this.phase === 'dying') {
-            this.dieLeft -= step;
+            this.dieLeft -= d;
             this.acc = 0;
-            if (this.dieLeft <= 0) {
-                this.enterOver();
-            }
-        } else if (this.phase !== 'playing') {
+            if (this.dieLeft <= 0) this.enterOver();
+        } else {
             this.acc = 0;
         }
-        this.fx.update(step);
-        this.refresh();
+
+        this.fx.update(d);
+        this.stepSmoke();
+        this.render();
     }
 
+    /* ------------------------------ 节点 ------------------------------ */
+
     private ensureNodes(): void {
-        if (this.built) {
-            return;
-        }
-        this.fieldNode = uiNode('field');
-        this.node.addChild(this.fieldNode);
+        if (this.built) return;
+        const root = this.node;
+
+        this.fieldNode = makeNode('field');
+        root.addChild(this.fieldNode);
         this.fieldNode.addComponent(UITransform).setAnchorPoint(0, 0);
-        this.fieldGfx = this.fieldNode.addComponent(Graphics);
-        this.fieldBlock = uiNode('block');
+        // 用遮罩把场地内的所有绘制裁到场地矩形里：蛇身描边有半个线宽的溢出，
+        // 边界裁剪后不会再糊到场地外面（禅意穿墙时尤其明显）。
+        // 万一某个平台不支持遮罩，也不让整个界面挂掉。
+        try {
+            const mask = this.fieldNode.addComponent(Mask);
+            mask.type = Mask.Type.GRAPHICS_RECT;
+        } catch (err) {
+            void err;
+        }
+
+        const bgNode = makeNode('field-bg');
+        this.fieldNode.addChild(bgNode);
+        this.fieldBg = bgNode.addComponent(Graphics);
+
+        const dynNode = makeNode('field-dyn');
+        this.fieldNode.addChild(dynNode);
+        this.fieldDyn = dynNode.addComponent(Graphics);
+
+        const cardNode = makeNode('field-cards');
+        this.fieldNode.addChild(cardNode);
+        this.fieldCards = cardNode.addComponent(Graphics);
+
+        this.fieldBlock = makeNode('field-block');
         this.fieldNode.addChild(this.fieldBlock);
         this.fieldBlock.addComponent(UITransform).setAnchorPoint(0, 0);
         this.fieldBlock.addComponent(BlockInputEvents);
-        this.sliderNode = uiNode('slider');
-        this.node.addChild(this.sliderNode);
-        this.sliderNode.addComponent(UITransform).setAnchorPoint(0.5, 0.5);
-        this.sliderGfx = this.sliderNode.addComponent(Graphics);
-        this.sliderNode.on(Node.EventType.TOUCH_START, this.onSlider, this);
-        this.sliderNode.on(Node.EventType.TOUCH_MOVE, this.onSlider, this);
+
+        this.fieldLabels = makeNode('field-labels');
+        this.fieldNode.addChild(this.fieldLabels);
+        this.fieldButtons = makeNode('field-buttons');
+        this.fieldNode.addChild(this.fieldButtons);
+
+        this.screenLabels = makeNode('screen-labels');
+        root.addChild(this.screenLabels);
+        this.screenButtons = makeNode('screen-buttons');
+        root.addChild(this.screenButtons);
+
         this.fieldNode.on(Node.EventType.TOUCH_START, this.onSwipeStart, this);
         this.fieldNode.on(Node.EventType.TOUCH_END, this.onSwipeEnd, this);
         this.fieldNode.on(Node.EventType.TOUCH_CANCEL, this.onSwipeEnd, this);
+
         this.built = true;
     }
 
     private viewSize(): { w: number; h: number } {
-        const visible = view.getVisibleSize();
-        if (visible.width > 32 && visible.height > 32) {
-            return { w: visible.width, h: visible.height };
-        }
+        const s = view.getVisibleSize();
+        if (s.width > 32 && s.height > 32) return { w: s.width, h: s.height };
         const ui = this.getComponent(UITransform);
         return {
             w: ui && ui.contentSize.width > 32 ? ui.contentSize.width : 1280,
@@ -291,62 +345,55 @@ export class GameApp extends Component {
         };
     }
 
-    private refresh = (): void => {
-        if (!this.fieldNode || !this.fieldGfx || !this.fieldBlock) {
-            return;
-        }
-        const { w: W, h: H } = this.viewSize();
-        if (W < 32 || H < 32) {
-            return;
-        }
-        const latest = this.readNative();
-        if (latest) {
-            this.nativeInfo = latest;
-        }
-        const chrome = layoutChrome(W, H, this.model(W, H), this.clock);
-        this.placeField(chrome, W, H);
-        this.drawField(chrome);
-        this.syncLabels(chrome, W, H);
-        this.syncButtons(chrome, W, H);
-        this.drawSlider(chrome, W, H);
-    };
+    /* ------------------------------ 模型 ------------------------------ */
 
-    private model(W: number, H: number): UiModel {
+    private displayModel(w: number, h: number): void {
+        if (!this.displayDirty) return;
+        this.displayDirty = false;
+        const info = this.nativeInfo;
+        const key = info
+            ? [info.width, info.height, info.fullscreen, info.dpi, info.workW, info.workH, info.screenW, info.screenH].join(':')
+            : 'none';
+        const size = w + 'x' + h;
+        if (this.displayKey !== key || this.displaySize !== size) {
+            this.displayKey = key;
+            this.displaySize = size;
+            this.displayLine = displayStatus(info, w, h);
+            this.displayChoices = this.displayChoicesOf(info);
+        }
+    }
+
+    private buildModel(w: number, h: number): UiModel {
+        this.displayModel(w, h);
         const world = this.world;
-        const playing = world && (this.phase === 'playing' || this.phase === 'paused' || this.phase === 'dying' || this.phase === 'over');
-        const active = playing ? world.mode : this.save.mode;
-        const parts: string[] = [];
+        const live = !!world && (this.phase === 'playing' || this.phase === 'paused' || this.phase === 'dying' || this.phase === 'over');
+        const activeMode: Mode = live && world ? world.mode : this.save.mode;
+        const buff: string[] = [];
         if (world && (this.phase === 'playing' || this.phase === 'paused' || this.phase === 'dying')) {
-            if (world.slowLeft > 0) {
-                parts.push(`慢动作 ${world.slowLeft.toFixed(1)}s`);
-            }
-            if (world.mult > 1) {
-                parts.push(`双倍 ×${world.multLeft}`);
-            }
-            if (active === 'challenge' && world.eaten >= 4) {
-                parts.push('节奏加快');
-            }
+            if (world.slowLeft > 0) buff.push('慢动作 ' + world.slowLeft.toFixed(1) + 's');
+            if (world.mult > 1) buff.push('双倍 ×' + world.multLeft);
+            if (activeMode === 'challenge' && world.eaten >= 4) buff.push('节奏加快');
         }
-        if (this.pending && (this.phase === 'playing' || this.phase === 'paused')) {
-            parts.push(`下局 ${MODE_NAME[this.pending]}`);
+        if (this.pendingMode && (this.phase === 'playing' || this.phase === 'paused')) {
+            buff.push('下局 ' + MODE_NAME[this.pendingMode]);
         }
-        if (this.phase === 'paused' && !this.help) {
-            parts.push('已暂停');
-        }
-        const mobile = sys.isMobile || H > W;
+        if (this.phase === 'paused') buff.push('已暂停');
+
+        const info = this.nativeInfo;
         return {
             phase: this.phase,
-            help: this.help,
-            historyOpen: this.historyOpen,
+            settingsOpen: this.settingsOpen,
+            settingsTab: this.settingsTab,
+            confirmClear: this.confirmClear,
+            confirmQuit: this.confirmQuit,
             selectedMode: this.save.mode,
-            pendingMode: this.pending,
-            activeMode: active,
-            score: playing ? world.score : 0,
+            pendingMode: this.pendingMode,
+            activeMode,
+            score: live && world ? world.score : 0,
             best: this.save.best,
             bestByMode: this.save.best_by_mode,
-            lengthText: playing ? String(world.snake.length) : '—',
-            buff: parts.join('   '),
-            speed: this.save.speed,
+            lengthText: live && world ? String(world.snake.length) : '—',
+            buff: buff.join('   '),
             soundOn: this.tones.enabled,
             soundAvailable: this.soundAvailable,
             resultScore: this.resultScore,
@@ -356,356 +403,503 @@ export class GameApp extends Component {
             newModeRecord: this.newModeRecord,
             victory: this.victory,
             history: this.save.history,
-            mobile,
+            mobile: sys.isMobile || w < 700,
             scoreHot: this.scoreHot > 0,
-            confirmClear: this.confirmClear,
-            displayOpen: this.displayOpen,
-            displayChoices: this.displayChoices(),
-            displayMode: this.nativeInfo ? (this.nativeInfo.fullscreen ? 'fullscreen' : 'window') : screen.fullScreen() ? 'fullscreen' : 'window',
-            displayWidth: this.nativeInfo?.width || this.save.display.width,
-            displayHeight: this.nativeInfo?.height || this.save.display.height,
-            displayLine: displayStatus(this.nativeInfo, W, H),
+            displayMode: info ? (info.fullscreen ? 'fullscreen' : 'window') : screen.fullScreen() ? 'fullscreen' : 'window',
+            displayWidth: (info && info.width) || this.save.display.width,
+            displayHeight: (info && info.height) || this.save.display.height,
+            displayLine: this.displayLine,
+            displayChoices: this.displayChoices,
         };
     }
 
-    private placeField(chrome: Chrome, W: number, H: number): void {
-        const field = this.fieldNode!;
-        const tr = field.getComponent(UITransform)!;
-        tr.setContentSize(chrome.field.w, chrome.field.h);
-        const x = chrome.field.x - W / 2;
-        const y = chrome.field.y - H / 2;
-        this.fieldBase.x = x;
-        this.fieldBase.y = y;
-        const mag = this.shake > 0 ? (this.shake / 0.42) * 7 : 0;
-        field.setPosition(x + Math.sin(this.clock * 54) * mag, y + Math.cos(this.clock * 47) * mag * 0.65, 0);
-        const block = this.fieldBlock!.getComponent(UITransform)!;
-        block.setContentSize(chrome.field.w, chrome.field.h);
-        this.fieldBlock!.setPosition(0, 0, 0);
-        this.fieldBlock!.active = chrome.overlay.length > 0;
-        this.grid = { cell: chrome.field.cell, rows: chrome.field.rows, cols: chrome.field.cols, w: chrome.field.w, h: chrome.field.h };
-        this.reconcileGrid(chrome.field.cols, chrome.field.rows);
+    private layout(w: number, h: number, model: UiModel): Chrome {
+        const key = [
+            w,
+            h,
+            model.phase,
+            model.activeMode,
+            model.selectedMode,
+            model.pendingMode,
+            model.settingsOpen,
+            model.settingsTab,
+            model.confirmQuit,
+            model.confirmClear,
+            model.soundOn,
+            model.soundAvailable,
+            model.mobile,
+            model.displayMode,
+            model.displayWidth,
+            model.displayHeight,
+            model.displayChoices.length,
+            model.best,
+            model.history.length,
+            model.displayLine,
+        ].join('|');
+        if (this.layoutCache.key !== key) {
+            this.layoutCache = { key, lay: layoutChrome(w, h, model) };
+        }
+        return this.layoutCache.lay as Chrome;
+    }
+
+    /* ------------------------------ 渲染 ------------------------------ */
+
+    private render(): void {
+        const size = this.viewSize();
+        if (size.w < 32 || size.h < 32) return;
+        this.viewW = size.w;
+        this.viewH = size.h;
+        this.pollNative(false);
+
+        const model = this.buildModel(size.w, size.h);
+        const lay = this.layout(size.w, size.h, model);
+        if (this.appliedLay !== lay) {
+            this.applyLayout(lay);
+            this.appliedLay = lay;
+        }
+        this.drawScene(lay, model);
+        this.patchDynamic(lay, model);
+        this.syncLabels(lay.labels, size.w, size.h, lay.field.h);
+        this.syncButtons(lay.buttons, size.w, size.h);
+    }
+
+    // 布局只在状态变化时重算，但分数 / 长度 / 增益条每帧都可能变化，
+    // 这里只改写文字本身，不触发重新排版。
+    private patchDynamic(lay: Chrome, model: UiModel): void {
+        let byId = (lay as unknown as { byId?: Record<string, LabelSpec> }).byId;
+        if (!byId) {
+            const map: Record<string, LabelSpec> = {};
+            for (const l of lay.labels) map[l.id] = l;
+            byId = map;
+            (lay as unknown as { byId?: Record<string, LabelSpec> }).byId = byId;
+        }
+        const set = (id: string, text: string): void => {
+            const spec = byId[id];
+            if (!spec || spec.text === text) return;
+            spec.text = text;
+            spec.w = measure(text, spec.size) + 4;
+        };
+        set('score', '分数 ' + model.score);
+        set('length', '长度 ' + model.lengthText);
+        set('buff', model.buff);
+    }
+
+    private applyLayout(lay: Chrome): void {
+        const f = lay.field;
+        this.fieldNode!.getComponent(UITransform)!.setContentSize(f.w, f.h);
+        this.fieldBase.x = f.x - this.viewW / 2;
+        this.fieldBase.y = f.y - this.viewH / 2;
+        this.fieldBlock!.getComponent(UITransform)!.setContentSize(f.w, f.h);
+        this.fieldBlock!.active = lay.cards.length > 0;
+        this.grid = { cell: f.cell, cols: f.cols, rows: f.rows, w: f.w, h: f.h };
+        this.reconcileGrid(f.cols, f.rows);
+        this.paintOps(this.fieldCards!, lay.cards);
     }
 
     private reconcileGrid(cols: number, rows: number): void {
         const world = this.world;
-        if (!world || this.phase === 'menu') {
-            return;
+        if (!world || this.phase === 'menu') return;
+        let fits = true;
+        for (const c of world.snake) {
+            if (c[0] < 0 || c[0] >= cols || c[1] < 0 || c[1] >= rows) {
+                fits = false;
+                break;
+            }
         }
-        const fits = world.snake.every(([x, y]) => x >= 0 && x < cols && y >= 0 && y < rows);
-        if (!fits) {
+        if (fits) {
+            world.cols = cols;
+            world.rows = rows;
+            if (world.berry && (world.berry[0] >= cols || world.berry[1] >= rows)) world.berry = null;
+            if (world.special && (world.special.x >= cols || world.special.y >= rows)) world.special = null;
+        } else {
             this.showMenu();
-            return;
-        }
-        world.cols = cols;
-        world.rows = rows;
-        if (world.berry && (world.berry[0] >= cols || world.berry[1] >= rows)) {
-            world.berry = null;
-        }
-        if (world.special && (world.special.x >= cols || world.special.y >= rows)) {
-            world.special = null;
         }
     }
 
-    private drawField(chrome: Chrome): void {
-        const world = this.world;
+    private drawScene(lay: Chrome, model: UiModel): void {
+        void model;
+        const f = lay.field;
+        const amp = this.shake > 0 ? (this.shake / 0.42) * 7 : 0;
+        this.fieldNode!.setPosition(
+            this.fieldBase.x + Math.sin(54 * this.clock) * amp,
+            this.fieldBase.y + Math.cos(47 * this.clock) * amp * 0.65,
+            0
+        );
+
+        const bgKey = f.w + 'x' + f.h + 'x' + f.cols + 'x' + f.rows;
+        if (this.bgKey !== bgKey) {
+            this.bgKey = bgKey;
+            this.paintOps(this.fieldBg!, paintBackground(f.w, f.h, f.cols, f.rows));
+            this.stars = makeStars(f.w, f.h, f.cols, f.rows);
+        }
+
         let lead = 0;
-        if (this.phase === 'playing' && world) {
-            const interval = intervalMs(this.save.speed, world.mode, world.eaten, world.slowLeft) / 1000;
+        if (this.phase === 'playing' && this.world) {
+            const interval = intervalMs(GAME_SPEED, this.world.mode, this.world.eaten, this.world.slowLeft) / 1000;
             lead = interval > 0 ? Math.max(0, Math.min(0.999, this.acc / interval)) : 0;
         }
-        const frame = paintField({
-            world: this.phase === 'menu' ? null : world,
-            cols: chrome.field.cols,
-            rows: chrome.field.rows,
-            cell: chrome.field.cell,
+
+        const out = paintField({
+            world: this.phase === 'menu' ? null : this.world,
+            cols: f.cols,
+            rows: f.rows,
+            cell: f.cell,
             clock: this.clock,
             lead,
             blink: this.blinking(),
             pulse: this.pulse(),
             tongue: this.tongue,
             fx: this.fx,
-            mascot: this.phase === 'menu' || !world,
+            mascot: this.phase === 'menu' || !this.world,
+            stars: this.stars,
         });
-        replay(this.fieldGfx!, frame.cmds.concat(chrome.overlay));
-        frame.popups.forEach((p, i) => {
-            chrome.labels.push({
-                id: `pop-${i}`,
-                text: p.text,
-                x: p.x,
-                y: p.y,
-                size: p.size,
-                color: p.color,
-                bold: true,
-                align: 'center',
-                w: p.size * (p.text.length + 1),
-                parent: 'field',
-            });
-        });
+        this.paintOps(this.fieldDyn!, out.cmds);
+        this.syncPopups(out.popups);
     }
 
-    private syncLabels(chrome: Chrome, W: number, H: number): void {
-        const used = new Set<string>();
-        for (const spec of chrome.labels) {
-            used.add(spec.id);
-            const label = this.ensureLabel(spec);
-            const wrap = this.labelWrap(label);
-            const parent = spec.parent === 'field' ? this.fieldNode! : this.node;
-            if (wrap.parent !== parent) {
-                parent.addChild(wrap);
-            }
-            wrap.setSiblingIndex(parent.children.length - 1);
-            label.string = spec.text;
-            label.color = hexColor(spec.color);
-            label.isBold = spec.bold;
-            label.horizontalAlign = spec.align === 'left' ? Label.HorizontalAlign.LEFT : spec.align === 'right' ? Label.HorizontalAlign.RIGHT : Label.HorizontalAlign.CENTER;
-            label.overflow = Label.Overflow.NONE;
-            label.enableWrapText = false;
-            const ui = label.node.getComponent(UITransform)!;
-            const width = Math.max(8, spec.w);
-            const height = spec.size + 8;
-            const applied = this.glyphScale(spec.size);
-            ui.setAnchorPoint(0.5, 0.5);
-            ui.setContentSize(width * applied, height * applied);
-            label.fontSize = Math.max(8, Math.round(spec.size * applied));
-            label.lineHeight = label.fontSize + Math.round(4 * applied);
-            // 系统字体大约超过 64 像素就画不出来。外层只缩回实际画出的倍数，标题保持排版大小。
-            label.node.setScale(1, 1, 1);
-            label.node.setPosition(0, 0, 0);
-            wrap.setScale(1 / applied, 1 / applied, 1);
-            let x = spec.parent === 'field' ? spec.x : spec.x - W / 2;
-            const y = spec.parent === 'field' ? spec.y : spec.y - H / 2;
-            if (spec.align === 'left') {
-                x += width / 2;
-            } else if (spec.align === 'right') {
-                x -= width / 2;
-            }
-            wrap.setPosition(x, y, 0);
-            wrap.active = true;
-            label.node.active = true;
-        }
-        for (const [id, label] of this.labels) {
-            if (!used.has(id)) {
-                label.node.active = false;
-                const wrap = label.node.parent;
-                if (wrap) {
-                    wrap.active = false;
+    private paintOps(gfx: Graphics, cmds: DrawCmd[]): void {
+        gfx.clear();
+        gfx.lineJoin = Graphics.LineJoin.ROUND;
+        gfx.lineCap = Graphics.LineCap.ROUND;
+        for (const c of cmds) {
+            if (c.op === 'poly' || c.op === 'line' || c.op === 'stroke') {
+                if (!c.pts || c.pts.length < 4) continue;
+                const trace = (): void => {
+                    gfx.moveTo(c.pts![0], c.pts![1]);
+                    for (let k = 2; k < c.pts!.length; k += 2) gfx.lineTo(c.pts![k], c.pts![k + 1]);
+                    if (c.op === 'poly') gfx.close();
+                };
+                if (c.fill) {
+                    gfx.fillColor = colorOf(c.fill);
+                    trace();
+                    gfx.fill();
+                }
+                if (c.stroke || c.op === 'line' || c.op === 'stroke') {
+                    gfx.strokeColor = colorOf(c.stroke || '#ffffff');
+                    gfx.lineWidth = c.sw ?? 1;
+                    trace();
+                    gfx.stroke();
+                }
+            } else if (c.op === 'circle') {
+                if (c.fill) {
+                    gfx.fillColor = colorOf(c.fill);
+                    gfx.circle(c.x!, c.y!, c.r!);
+                    gfx.fill();
+                }
+                if (c.stroke) {
+                    gfx.strokeColor = colorOf(c.stroke);
+                    gfx.lineWidth = c.sw ?? 1;
+                    gfx.circle(c.x!, c.y!, c.r!);
+                    gfx.stroke();
+                }
+            } else if (c.op === 'ellipse') {
+                if (c.fill) {
+                    gfx.fillColor = colorOf(c.fill);
+                    gfx.ellipse(c.x!, c.y!, c.rx!, c.ry!);
+                    gfx.fill();
+                }
+                if (c.stroke) {
+                    gfx.strokeColor = colorOf(c.stroke);
+                    gfx.lineWidth = c.sw ?? 1;
+                    gfx.ellipse(c.x!, c.y!, c.rx!, c.ry!);
+                    gfx.stroke();
                 }
             }
         }
     }
 
-    private labelWrap(label: Label): Node {
-        const node = label.node;
-        const current = node.parent;
-        if (current && current.name === `${node.name}-wrap`) {
-            return current;
-        }
-        const wrap = uiNode(`${node.name}-wrap`);
+    /* ------------------------------ Label / Button ------------------------------ */
+
+    private pixelScale(): number {
+        const s = view.getScaleY();
+        return !Number.isFinite(s) || s <= 1.05 ? 1 : Math.min(2, s);
+    }
+
+    private glyphScale(size: number): number {
+        const t = Math.max(8, size);
+        return Math.max(8, Math.min(64, Math.round(t * this.pixelScale()))) / t;
+    }
+
+    private ensureLabel(id: string): LabelView {
+        let entry = this.labelMap.get(id);
+        if (entry) return entry;
+        const node = makeNode(id);
+        node.addComponent(UITransform).setAnchorPoint(0.5, 0.5);
+        const label = node.addComponent(Label);
+        label.useSystemFont = true;
+        label.fontFamily = FONT;
+        label.cacheMode = Label.CacheMode.NONE;
+        label.verticalAlign = Label.VerticalAlign.CENTER;
+        label.overflow = Label.Overflow.NONE;
+        label.enableWrapText = false;
+        const wrap = makeNode(id + '-wrap');
         wrap.addChild(node);
         node.setPosition(0, 0, 0);
-        return wrap;
+        entry = { id, node, wrap, label, ui: node.getComponent(UITransform)!, last: {} };
+        this.labelMap.set(id, entry);
+        return entry;
     }
 
-    private ensureLabel(spec: LabelSpec): Label {
-        let label = this.labels.get(spec.id);
-        if (!label) {
-            const node = uiNode(spec.id);
-            label = node.addComponent(Label);
-            label.useSystemFont = true;
-            label.fontFamily = 'Microsoft YaHei, PingFang SC, Noto Sans SC, WenQuanYi Micro Hei, sans-serif';
-            label.cacheMode = Label.CacheMode.NONE;
-            label.verticalAlign = Label.VerticalAlign.CENTER;
-            node.addComponent(UITransform);
-            this.labels.set(spec.id, label);
-        }
-        return label;
-    }
+    private syncLabels(specs: LabelSpec[], w: number, h: number, fieldH: number): void {
+        const seen = new Set<string>();
+        for (const spec of specs) {
+            seen.add(spec.id);
+            const e = this.ensureLabel(spec.id);
+            const host = spec.parent === 'field' ? this.fieldLabels! : this.screenLabels!;
+            if (e.wrap.parent !== host) host.addChild(e.wrap);
+            if (!e.wrap.active) e.wrap.active = true;
 
-    private syncButtons(chrome: Chrome, W: number, H: number): void {
-        const used = new Set<string>();
-        for (const spec of chrome.buttons) {
-            used.add(spec.id);
-            const view = this.ensureButton(spec);
-            const parent = spec.parent === 'field' ? this.fieldNode! : this.node;
-            if (view.root.parent !== parent) {
-                parent.addChild(view.root);
+            const c = this.glyphScale(spec.size);
+            const size = Math.max(8, Math.round(spec.size * c));
+            const bw = Math.max(8, spec.w);
+            let px = spec.parent === 'field' ? spec.x : spec.x - w / 2;
+            let py = spec.parent === 'field' ? spec.y : spec.y - h / 2;
+            if (spec.bob) py += Math.sin(1.6 * this.clock) * Math.max(3, 0.008 * fieldH);
+            if (spec.align === 'left') px += bw / 2;
+            else if (spec.align === 'right') px -= bw / 2;
+
+            const last = e.last;
+            if (last.text !== spec.text) {
+                e.label.string = spec.text;
+                last.text = spec.text;
             }
-            view.root.setSiblingIndex(parent.children.length - 1);
-            view.ui.setContentSize(spec.w, spec.h);
-            const [x, y] = spec.parent === 'field' ? [spec.x, spec.y] : [spec.x - W / 2, spec.y - H / 2];
-            view.root.setPosition(x, y, 0);
-            view.root.active = true;
-            view.label.string = spec.text;
-            view.label.overflow = Label.Overflow.NONE;
-            const applied = this.glyphScale(14);
-            view.label.fontSize = Math.max(10, Math.round(14 * applied));
-            view.label.lineHeight = view.label.fontSize + Math.round(4 * applied);
-            const textUi = view.label.node.getComponent(UITransform);
-            if (textUi) {
-                textUi.setContentSize(Math.max(8, spec.w - 8) * applied, spec.h * applied);
+            if (last.color !== spec.color) {
+                e.label.color = colorOf(spec.color);
+                last.color = spec.color;
             }
-            const textWrap = this.buttonTextWrap(view);
-            textWrap.setScale(1 / applied, 1 / applied, 1);
-            view.label.node.setScale(1, 1, 1);
-            view.label.node.setPosition(0, 0, 0);
-            view.label.isBold = true;
-            view.label.color = hexColor(spec.enabled && (spec.selected || spec.primary) ? '#ffffff' : spec.enabled ? '#cbbbe8' : '#8d7eae');
-            const g = view.gfx;
-            g.clear();
-            g.lineJoin = Graphics.LineJoin.ROUND;
-            const fill = !spec.enabled ? '#241845' : spec.primary || spec.selected ? '#ff7eb6' : '#2a1b55';
-            g.fillColor = hexColor(fill);
-            g.roundRect(-spec.w / 2, -spec.h / 2, spec.w, spec.h, 6);
-            g.fill();
-            let opacity = view.root.getComponent(UIOpacity);
-            if (!opacity) {
-                opacity = view.root.addComponent(UIOpacity);
+            if (last.bold !== spec.bold) {
+                e.label.isBold = spec.bold;
+                last.bold = spec.bold;
             }
-            opacity.opacity = spec.enabled ? 255 : 120;
-            view.handler = () => this.onButton(spec.id);
+            if (last.align !== spec.align) {
+                e.label.horizontalAlign =
+                    spec.align === 'left' ? Label.HorizontalAlign.LEFT : spec.align === 'right' ? Label.HorizontalAlign.RIGHT : Label.HorizontalAlign.CENTER;
+                last.align = spec.align;
+            }
+            if (last.size !== size) {
+                e.label.fontSize = size;
+                e.label.lineHeight = size + Math.round(4 * c);
+                last.size = size;
+                last.bw = -1;
+            }
+            if (last.bw !== bw) {
+                e.ui.setContentSize(bw * c, (spec.size + 8) * c);
+                e.wrap.setScale(1 / c, 1 / c, 1);
+                last.bw = bw;
+            }
+            if (last.x !== px || last.y !== py) {
+                e.wrap.setPosition(px, py, 0);
+                last.x = px;
+                last.y = py;
+            }
         }
-        for (const [id, view] of this.buttons) {
-            if (!used.has(id)) {
-                view.root.active = false;
+        for (const [id, e] of this.labelMap) {
+            // 飘字（pop-*）由 syncPopups 单独管理，不能被这里的清理逻辑关掉
+            if (!seen.has(id) && id.indexOf('pop-') !== 0 && e.wrap.active) {
+                e.wrap.active = false;
             }
         }
     }
 
     private ensureButton(spec: ButtonSpec): ButtonView {
-        let view = this.buttons.get(spec.id);
-        if (view) {
-            return view;
-        }
-        const root = uiNode(spec.id);
+        const existing = this.buttonMap.get(spec.id);
+        if (existing) return existing;
+        const root = makeNode(spec.id);
         const ui = root.addComponent(UITransform);
         ui.setAnchorPoint(0.5, 0.5);
         const gfx = root.addComponent(Graphics);
-        const text = uiNode('text');
-        root.addChild(text);
-        const label = text.addComponent(Label);
+        const wrap = makeNode('text-wrap');
+        root.addChild(wrap);
+        const node = makeNode('text');
+        wrap.addChild(node);
+        const label = node.addComponent(Label);
         label.useSystemFont = true;
-        label.fontFamily = 'Microsoft YaHei, PingFang SC, Noto Sans SC, WenQuanYi Micro Hei, sans-serif';
+        label.fontFamily = FONT;
         label.cacheMode = Label.CacheMode.NONE;
         label.horizontalAlign = Label.HorizontalAlign.CENTER;
         label.verticalAlign = Label.VerticalAlign.CENTER;
-        label.overflow = Label.Overflow.SHRINK;
-        const textUi = text.addComponent(UITransform);
-        textUi.setAnchorPoint(0.5, 0.5);
-        textUi.setContentSize(spec.w - 8, spec.h);
-        const made: ButtonView = { root, gfx, label, ui, handler: () => undefined };
-        this.buttonTextWrap(made);
-        root.on(Node.EventType.TOUCH_START, (event: EventTouch) => {
-            event.propagationStopped = true;
-        }, this);
-        root.on(Node.EventType.TOUCH_END, (event: EventTouch) => {
-            event.propagationStopped = true;
-            if (root.getComponent(UIOpacity)?.opacity !== 120) {
-                made.handler();
+        label.overflow = Label.Overflow.NONE;
+        label.enableWrapText = false;
+        const ui2 = node.addComponent(UITransform);
+        ui2.setAnchorPoint(0.5, 0.5);
+
+        const entry: ButtonView = {
+            id: spec.id,
+            root,
+            ui,
+            gfx,
+            wrap,
+            label,
+            ui2,
+            spec,
+            pressed: false,
+            enabled: true,
+            applied: null,
+            handler: () => undefined,
+        };
+        const repaint = (): void => {
+            if (!entry.spec) return;
+            entry.pressed = entry.pressed && entry.enabled;
+            this.paintButton(entry);
+            root.setScale(entry.pressed ? 0.97 : 1, entry.pressed ? 0.97 : 1, 1);
+        };
+        root.on(
+            Node.EventType.TOUCH_START,
+            (ev: EventTouch) => {
+                ev.propagationStopped = true;
+                entry.pressed = true;
+                repaint();
+            },
+            this
+        );
+        root.on(
+            Node.EventType.TOUCH_END,
+            (ev: EventTouch) => {
+                ev.propagationStopped = true;
+                const wasPressed = entry.pressed;
+                entry.pressed = false;
+                repaint();
+                if (wasPressed && entry.enabled) entry.handler();
+            },
+            this
+        );
+        root.on(
+            Node.EventType.TOUCH_CANCEL,
+            (ev: EventTouch) => {
+                ev.propagationStopped = true;
+                entry.pressed = false;
+                repaint();
+            },
+            this
+        );
+        this.buttonMap.set(spec.id, entry);
+        return entry;
+    }
+
+    // 按钮底板：按下列变暗并轻微内缩，给点击一点反馈
+    private paintButton(e: ButtonView): void {
+        const spec = e.spec;
+        if (!spec) return;
+        const fill = !spec.enabled
+            ? '#241845'
+            : spec.danger
+              ? spec.selected
+                  ? '#c2304f'
+                  : '#7b2140'
+              : spec.selected || spec.primary
+                ? '#ff7eb6'
+                : '#2a1b55';
+        e.gfx.clear();
+        e.gfx.fillColor = colorOf(e.pressed ? shade(fill, 0.78) : fill);
+        e.gfx.roundRect(-spec.w / 2, -spec.h / 2, spec.w, spec.h, 6);
+        e.gfx.fill();
+        if (spec.selected && spec.enabled && !e.pressed) {
+            e.gfx.strokeColor = colorOf('#ffe9f3');
+            e.gfx.lineWidth = 2;
+            e.gfx.roundRect(-spec.w / 2 + 1, -spec.h / 2 + 1, spec.w - 2, spec.h - 2, 6);
+            e.gfx.stroke();
+        }
+    }
+
+    private syncButtons(specs: ButtonSpec[], w: number, h: number): void {
+        const seen = new Set<string>();
+        for (const spec of specs) {
+            seen.add(spec.id);
+            const e = this.ensureButton(spec);
+            const host = spec.parent === 'field' ? this.fieldButtons! : this.screenButtons!;
+            if (e.root.parent !== host) host.addChild(e.root);
+            if (!e.root.active) e.root.active = true;
+            e.enabled = spec.enabled;
+            // 布局对象在状态不变时会被复用，因此可以直接用对象身份判断是否需要重绘
+            if (e.applied === spec) continue;
+            e.applied = spec;
+            e.spec = spec;
+            e.pressed = false;
+
+            const x = spec.parent === 'field' ? spec.x : spec.x - w / 2;
+            const y = spec.parent === 'field' ? spec.y : spec.y - h / 2;
+            e.ui.setContentSize(spec.w, spec.h);
+            e.root.setPosition(x, y, 0);
+            e.root.setScale(1, 1, 1);
+            this.paintButton(e);
+            const c = this.glyphScale(16);
+            e.label.string = spec.text;
+            e.label.fontSize = Math.max(10, Math.round(14 * c));
+            e.label.lineHeight = e.label.fontSize + Math.round(4 * c);
+            e.label.color = colorOf(spec.enabled && (spec.selected || spec.primary) ? '#ffffff' : spec.enabled ? '#cbbbe8' : '#8d7eae');
+            e.wrap.setScale(1 / c, 1 / c, 1);
+            e.ui2.setContentSize(Math.max(8, spec.w - 8) * c, spec.h * c);
+            e.handler = () => this.onButton(spec.id);
+        }
+        for (const [id, e] of this.buttonMap) {
+            if (!seen.has(id) && e.root.active) e.root.active = false;
+        }
+    }
+
+    private syncPopups(popups: Array<{ x: number; y: number; text: string; color: string; size: number }>): void {
+        for (let i = 0; i < POPUP_POOL; i++) {
+            if (!this.popupPool[i]) {
+                this.popupPool[i] = this.ensureLabel('pop-' + i);
             }
-        }, this);
-        this.buttons.set(spec.id, made);
-        return made;
+            const e = this.popupPool[i];
+            const p = popups[i];
+            if (!p) {
+                if (e.wrap.active) e.wrap.active = false;
+                continue;
+            }
+            if (e.wrap.parent !== this.fieldLabels) this.fieldLabels!.addChild(e.wrap);
+            if (!e.wrap.active) e.wrap.active = true;
+            const c = this.glyphScale(p.size);
+            const size = Math.max(8, Math.round(p.size * c));
+            const last = e.last;
+            if (last.text !== p.text) {
+                e.label.string = p.text;
+                last.text = p.text;
+            }
+            if (last.color !== p.color) {
+                e.label.color = colorOf(p.color);
+                last.color = p.color;
+            }
+            if (e.label.isBold !== true) {
+                e.label.isBold = true;
+                e.label.horizontalAlign = Label.HorizontalAlign.CENTER;
+            }
+            if (last.size !== size) {
+                e.label.fontSize = size;
+                e.label.lineHeight = size + Math.round(4 * c);
+                e.ui.setContentSize(Math.max(8, p.size * (p.text.length + 1)) * c, (p.size + 8) * c);
+                e.wrap.setScale(1 / c, 1 / c, 1);
+                last.size = size;
+            }
+            if (last.x !== p.x || last.y !== p.y) {
+                e.wrap.setPosition(p.x, p.y, 0);
+                last.x = p.x;
+                last.y = p.y;
+            }
+        }
     }
 
-    private buttonTextWrap(view: ButtonView): Node {
-        const text = view.label.node;
-        const current = text.parent;
-        if (current && current.name === 'text-wrap') {
-            return current;
-        }
-        const wrap = uiNode('text-wrap');
-        view.root.addChild(wrap);
-        wrap.addChild(text);
-        text.setPosition(0, 0, 0);
-        return wrap;
-    }
-
-    private drawSlider(chrome: Chrome, W: number, H: number): void {
-        const spec = chrome.slider;
-        const node = this.sliderNode!;
-        const ui = node.getComponent(UITransform)!;
-        ui.setContentSize(spec.w + 28, 36);
-        node.setPosition(spec.x - W / 2, spec.y - H / 2, 0);
-        const g = this.sliderGfx!;
-        g.clear();
-        g.fillColor = hexColor('#3a2a70');
-        g.roundRect(-spec.w / 2, -spec.h / 2, spec.w, spec.h, spec.h / 2);
-        g.fill();
-        const t = (spec.value - 1) / 9;
-        g.fillColor = hexColor('#ff7eb6');
-        g.roundRect(-spec.w / 2, -spec.h / 2, Math.max(spec.h, spec.w * t), spec.h, spec.h / 2);
-        g.fill();
-        const kx = -spec.w / 2 + spec.w * t;
-        g.fillColor = hexColor('#fff6fb');
-        g.circle(kx, 0, 9);
-        g.fill();
-        g.strokeColor = hexColor('#ff7eb6');
-        g.lineWidth = 2;
-        g.circle(kx, 0, 9);
-        g.stroke();
-    }
-
-    private onSlider = (event: EventTouch): void => {
-        const ui = this.sliderNode?.getComponent(UITransform);
-        const gfxW = ui ? ui.contentSize.width - 28 : 200;
-        if (!ui) {
-            return;
-        }
-        const local = ui.convertToNodeSpaceAR(event.getUILocation());
-        const t = Math.max(0, Math.min(1, (local.x + gfxW / 2) / gfxW));
-        const level = Math.max(1, Math.min(10, Math.round(1 + t * 9)));
-        if (level !== this.save.speed) {
-            this.save.speed = level;
-            this.persist();
-        }
-        this.tones.resume();
-    };
-
-    private onSwipeStart = (event: EventTouch): void => {
-        this.swipeStart = event.getUILocation();
-    };
-
-    private onSwipeEnd = (event: EventTouch): void => {
-        const start = this.swipeStart;
-        this.swipeStart = null;
-        if (!start || this.phase !== 'playing' || this.help || this.historyOpen || this.displayOpen || !this.world) {
-            return;
-        }
-        const end = event.getUILocation();
-        const dx = end.x - start.x;
-        const dy = end.y - start.y;
-        if (Math.hypot(dx, dy) < 28) {
-            return;
-        }
-        if (Math.abs(dx) > Math.abs(dy)) {
-            this.world.turn(dx > 0 ? 1 : -1, 0);
-        } else {
-            this.world.turn(0, dy > 0 ? -1 : 1);
-        }
-    };
+    /* ------------------------------ 交互 ------------------------------ */
 
     private onButton(id: string): void {
         this.tones.resume();
-        if (id.startsWith('mode-')) {
+        if (id.indexOf('mode-') === 0) {
             this.selectMode(id.slice(5) as Mode);
             return;
         }
-        if (id.startsWith('pad-')) {
-            const dir: Record<string, [number, number]> = {
+        if (id.indexOf('pad-') === 0) {
+            const map: Record<string, [number, number]> = {
                 'pad-up': [0, -1],
                 'pad-down': [0, 1],
                 'pad-left': [-1, 0],
                 'pad-right': [1, 0],
             };
-            const d = dir[id];
-            if (d && this.phase === 'playing' && !this.help && !this.historyOpen && this.world) {
-                this.world.turn(d[0], d[1]);
-            }
+            const dir = map[id];
+            if (dir && this.phase === 'playing' && !this.settingsOpen && this.world) this.world.turn(dir[0], dir[1]);
             return;
         }
-        if (id === 'start') {
-            this.help = false;
-            this.historyOpen = false;
+        if (id === 'start' || id === 'start-big') {
+            this.settingsOpen = false;
             this.startGame();
             return;
         }
@@ -713,153 +907,146 @@ export class GameApp extends Component {
             this.togglePause();
             return;
         }
-        if (id === 'help' || id === 'close-help') {
-            this.toggleHelp();
+        if (id === 'settings') {
+            this.toggleSettings(this.settingsTab);
             return;
         }
-        if (id === 'display' || id === 'close-display') {
-            this.displayOpen = id === 'display' ? !this.displayOpen : false;
-            if (this.displayOpen) {
-                this.help = false;
-                this.historyOpen = false;
-            }
+        if (id === 'close-settings') {
+            this.closeSettings();
             return;
         }
-        if (id === 'display-window' || id === 'display-full' || id.startsWith('res-')) {
-            this.chooseDisplay(id);
-            return;
-        }
-        if (id === 'quit') {
-            this.quit();
-            return;
-        }
-        if (id === 'history') {
-            this.historyOpen = !this.historyOpen;
+        if (id.indexOf('tab-') === 0) {
+            this.settingsTab = id.slice(4) as SettingsTab;
             this.confirmClear = false;
-            this.help = false;
-            this.displayOpen = false;
-            return;
-        }
-        if (id === 'close-history') {
-            this.historyOpen = false;
-            this.confirmClear = false;
-            return;
-        }
-        if (id === 'clear-history') {
-            if (!this.confirmClear) {
-                this.confirmClear = true;
-                return;
-            }
-            this.save.history = [];
-            this.save.best = 0;
-            this.save.best_by_mode = { classic: 0, zen: 0, challenge: 0 };
-            this.confirmClear = false;
-            this.persist();
+            this.confirmQuit = false;
             return;
         }
         if (id === 'sound') {
             this.toggleSound();
+            return;
+        }
+        if (id === 'display-window' || id === 'display-full' || id.indexOf('res-') === 0) {
+            this.chooseDisplay(id);
+            return;
+        }
+        if (id === 'clear-history') {
+            if (this.confirmClear) {
+                this.save.history = [];
+                this.save.best = 0;
+                this.save.best_by_mode = { classic: 0, zen: 0, challenge: 0 };
+                this.confirmClear = false;
+                this.persist();
+            } else {
+                this.confirmClear = true;
+            }
+            return;
+        }
+        if (id === 'quit') {
+            if (this.confirmQuit) this.quit();
+            else this.confirmQuit = true;
         }
     }
 
-    private onKey = (event: EventKeyboard): void => {
+    private onKey = (e: EventKeyboard): void => {
         this.tones.resume();
-        const key = event.keyCode;
-        if (key === KeyCode.KEY_H || key === KeyCode.F1) {
-            this.toggleHelp();
+        const k = e.keyCode;
+
+        if (this.settingsOpen) {
+            if (k === KeyCode.ESCAPE) this.closeSettings();
             return;
         }
-        if (key === KeyCode.KEY_N) {
-            if (this.soundAvailable) {
-                this.toggleSound();
-            }
-            return;
-        }
-        if (key === KeyCode.F11) {
-            this.onFullscreenKey();
-            return;
-        }
-        if (this.help && (key === KeyCode.ESCAPE || key === KeyCode.SPACE || key === KeyCode.KEY_P || key === KeyCode.ENTER || key === KeyCode.NUM_ENTER)) {
-            this.help = false;
-            return;
-        }
-        if (key === KeyCode.ESCAPE) {
-            this.onEscape();
-            return;
-        }
-        if (key === KeyCode.ENTER || key === KeyCode.NUM_ENTER) {
-            if (this.phase === 'menu' || this.phase === 'over' || this.phase === 'dying') {
-                this.startGame();
-            } else if (this.phase === 'paused') {
-                this.phase = 'playing';
-            }
-            return;
-        }
-        if (key === KeyCode.SPACE || key === KeyCode.KEY_P) {
-            if (this.clock - this.lastToggle < 0.18) {
-                return;
-            }
-            this.lastToggle = this.clock;
-            if (this.phase === 'menu') {
-                this.startGame();
-            } else if (this.phase === 'playing') {
-                this.phase = 'paused';
-                this.play('pause');
-            } else if (this.phase === 'paused') {
-                this.phase = 'playing';
-            } else if (this.phase === 'over' || this.phase === 'dying') {
-                this.startGame();
-            }
-            return;
-        }
-        if (key === KeyCode.KEY_R) {
+        // 标题界面：除 Esc / 修饰键外任意键直接开始
+        if (this.phase === 'menu') {
+            if (NO_START[k]) return;
             this.startGame();
             return;
         }
-        const dir = this.dirOf(key);
-        if (dir && this.phase === 'playing' && !this.help && !this.historyOpen && !this.displayOpen && this.world?.alive) {
-            this.world.turn(dir[0], dir[1]);
+        if (k === KeyCode.KEY_H || k === KeyCode.F1) {
+            this.toggleSettings('help');
+            return;
         }
+        if (k === KeyCode.KEY_N) {
+            this.toggleSound();
+            return;
+        }
+        if (k === KeyCode.ESCAPE) {
+            this.onEscape();
+            return;
+        }
+        if (k === KeyCode.ENTER || k === KeyCode.NUM_ENTER) {
+            if (this.phase === 'paused') this.phase = 'playing';
+            else this.startGame();
+            return;
+        }
+        if (k === KeyCode.SPACE || k === KeyCode.KEY_P) {
+            if (this.clock - this.lastToggle < 0.18) return;
+            this.lastToggle = this.clock;
+            if (this.phase === 'playing') {
+                this.phase = 'paused';
+                this.play('pause');
+            } else if (this.phase === 'paused') this.phase = 'playing';
+            else this.startGame();
+            return;
+        }
+        if (k === KeyCode.KEY_R) {
+            this.startGame();
+            return;
+        }
+        const dir = this.dirOf(k);
+        if (dir && this.phase === 'playing' && this.world && this.world.alive) this.world.turn(dir[0], dir[1]);
     };
 
-    private dirOf(key: KeyCode): [number, number] | null {
-        if (key === KeyCode.ARROW_UP || key === KeyCode.KEY_W) {
-            return [0, -1];
-        }
-        if (key === KeyCode.ARROW_DOWN || key === KeyCode.KEY_S) {
-            return [0, 1];
-        }
-        if (key === KeyCode.ARROW_LEFT || key === KeyCode.KEY_A) {
-            return [-1, 0];
-        }
-        if (key === KeyCode.ARROW_RIGHT || key === KeyCode.KEY_D) {
-            return [1, 0];
-        }
+    private onSwipeStart = (e: EventTouch): void => {
+        this.swipeStart = e.getUILocation();
+    };
+
+    private onSwipeEnd = (e: EventTouch): void => {
+        const from = this.swipeStart;
+        this.swipeStart = null;
+        if (!from || this.phase !== 'playing' || this.settingsOpen || !this.world) return;
+        const to = e.getUILocation();
+        const dx = to.x - from.x;
+        const dy = to.y - from.y;
+        if (Math.hypot(dx, dy) < 28) return;
+        if (Math.abs(dx) > Math.abs(dy)) this.world.turn(dx > 0 ? 1 : -1, 0);
+        else this.world.turn(0, dy > 0 ? -1 : 1);
+    };
+
+    private onHide = (): void => {
+        if (this.phase === 'playing') this.phase = 'paused';
+        this.persist();
+    };
+
+    private dirOf(k: number): [number, number] | null {
+        if (k === KeyCode.ARROW_UP || k === KeyCode.KEY_W) return [0, -1];
+        if (k === KeyCode.ARROW_DOWN || k === KeyCode.KEY_S) return [0, 1];
+        if (k === KeyCode.ARROW_LEFT || k === KeyCode.KEY_A) return [-1, 0];
+        if (k === KeyCode.ARROW_RIGHT || k === KeyCode.KEY_D) return [1, 0];
         return null;
     }
 
     private selectMode(mode: Mode): void {
         if (this.phase === 'playing' || this.phase === 'paused' || this.phase === 'dying') {
-            this.pending = mode === this.world?.mode ? null : mode;
+            this.pendingMode = this.world && mode === this.world.mode ? null : mode;
         } else {
             this.save.mode = mode;
-            this.pending = null;
+            this.pendingMode = null;
             this.persist();
         }
     }
 
     private startGame(): void {
-        if (this.pending) {
-            this.save.mode = this.pending;
-            this.pending = null;
+        if (this.pendingMode) {
+            this.save.mode = this.pendingMode;
+            this.pendingMode = null;
         }
-        const { w: W, h: H } = this.viewSize();
-        const chrome = layoutChrome(W, H, this.model(W, H), this.clock);
-        this.world = new SnakeWorld(chrome.field.cols, chrome.field.rows, this.save.mode);
+        const size = this.viewSize();
+        const lay = this.layout(size.w, size.h, this.buildModel(size.w, size.h));
+        this.world = new SnakeWorld(lay.field.cols, lay.field.rows, this.save.mode);
         this.phase = 'playing';
-        this.help = false;
-        this.historyOpen = false;
-        this.displayOpen = false;
+        this.settingsOpen = false;
+        this.confirmQuit = false;
+        this.confirmClear = false;
         this.acc = 0;
         this.recorded = false;
         this.victory = false;
@@ -881,55 +1068,53 @@ export class GameApp extends Component {
         }
     }
 
-    private toggleHelp(): void {
-        this.help = !this.help;
-        if (this.help) {
-            this.historyOpen = false;
-            this.displayOpen = false;
-            this.play('pause');
+    private toggleSettings(tab?: SettingsTab): void {
+        if (this.settingsOpen && (!tab || this.settingsTab === tab)) {
+            this.settingsOpen = false;
+        } else {
+            this.settingsOpen = true;
+            if (tab) this.settingsTab = tab;
         }
+        this.confirmClear = false;
+        this.confirmQuit = false;
+    }
+
+    private closeSettings(): void {
+        this.settingsOpen = false;
+        this.confirmClear = false;
+        this.confirmQuit = false;
     }
 
     private toggleSound(): void {
-        if (!this.soundAvailable) {
-            return;
-        }
+        if (!this.soundAvailable) return;
         this.tones.enabled = !this.tones.enabled;
         this.save.sound = this.tones.enabled;
         this.persist();
-        if (this.tones.enabled) {
-            this.play('pause');
-        }
+        if (this.tones.enabled) this.play('pause');
     }
 
     private showMenu(): void {
         this.phase = 'menu';
-        this.help = false;
-        this.historyOpen = false;
-        this.pending = null;
+        this.settingsOpen = false;
+        this.confirmClear = false;
+        this.confirmQuit = false;
+        this.pendingMode = null;
         this.world = null;
         this.acc = 0;
     }
 
+    // 注意：这里刻意不再调用 toggleFullscreen()。全屏只在设置里切换，启动即全屏。
     private onEscape(): void {
-        if (this.help) {
-            this.help = false;
+        if (this.settingsOpen) {
+            this.closeSettings();
             return;
         }
-        if (this.displayOpen) {
-            this.displayOpen = false;
+        if (this.phase === 'playing') {
+            this.phase = 'paused';
+            this.play('pause');
             return;
         }
-        if (this.historyOpen) {
-            this.historyOpen = false;
-            this.confirmClear = false;
-            return;
-        }
-        if (this.isFullscreen()) {
-            this.toggleFullscreen();
-            return;
-        }
-        if (this.phase !== 'menu') {
+        if (this.phase === 'paused' || this.phase === 'over' || this.phase === 'dying') {
             this.showMenu();
         }
     }
@@ -940,28 +1125,223 @@ export class GameApp extends Component {
             game.end();
             return;
         }
-        const closer = (globalThis as unknown as { close?: () => void }).close;
-        if (this.phase === 'menu' && closer) {
-            closer();
-        }
+        const close = (globalThis as { close?: () => void }).close;
+        if (close) close();
         this.showMenu();
     }
 
-    private onHide = (): void => {
-        if (this.phase === 'playing') {
-            this.phase = 'paused';
+    /* ------------------------------ 显示 ------------------------------ */
+
+    private bridge(): { snakeDisplay?: (op: string, w: number, h: number, full: number) => string } | null {
+        const g = globalThis as { jsb?: { snakeDisplay?: (op: string, w: number, h: number, full: number) => string } };
+        return g.jsb && g.jsb.snakeDisplay ? g.jsb : null;
+    }
+
+    private readNative(): NativeDisplay | null {
+        const b = this.bridge();
+        if (!b || !b.snakeDisplay) return null;
+        try {
+            const raw = b.snakeDisplay('state', 0, 0, 0);
+            return raw ? parseNativeDisplay(raw) : null;
+        } catch (err) {
+            void err;
+            return null;
+        }
+    }
+
+    // 旧版每帧都会跨桥读一次窗口状态，原生侧还会写日志，是卡顿主因之一。
+    private pollNative(force: boolean): void {
+        if (!force && this.clock - this.nativeAt < 0.75) return;
+        this.nativeAt = this.clock;
+        const info = this.readNative();
+        if (!info) return;
+        const old = this.nativeInfo;
+        const changed =
+            !old ||
+            old.width !== info.width ||
+            old.height !== info.height ||
+            old.fullscreen !== info.fullscreen ||
+            old.dpi !== info.dpi ||
+            old.workW !== info.workW ||
+            old.workH !== info.workH;
+        this.nativeInfo = info;
+        if (changed) this.displayDirty = true;
+    }
+
+    private preferredChoice(): DisplayChoice {
+        const choices = this.displayChoices.length ? this.displayChoices : this.displayChoicesOf(this.nativeInfo);
+        const saved = this.save.display;
+        if (saved.width < 640 || saved.height < 360) {
+            const auto = choices.find((c) => c.id === 'auto') ?? choices[0];
+            if (auto) return auto;
+        }
+        const found = pickSavedWindow(
+            saved.width || (this.nativeInfo ? this.nativeInfo.width : 1280),
+            saved.height || (this.nativeInfo ? this.nativeInfo.height : 720),
+            choices
+        );
+        return (
+            found ?? {
+                id: 'fallback',
+                width: (this.nativeInfo && this.nativeInfo.width) || 1280,
+                height: (this.nativeInfo && this.nativeInfo.height) || 720,
+                label: '',
+            }
+        );
+    }
+
+    private displayChoicesOf(info: NativeDisplay | null): DisplayChoice[] {
+        if (!info || info.workW < 640 || info.workH < 360) return [];
+        return windowChoices({ workW: info.workW, workH: info.workH, screenW: info.screenW, screenH: info.screenH });
+    }
+
+    private commitDisplay(w: number, h: number, fullscreen: boolean): void {
+        const b = this.bridge();
+        if (!b || !b.snakeDisplay) {
+            if (fullscreen || this.isFullscreen()) this.toggleBrowserFullscreen();
+            return;
+        }
+        b.snakeDisplay('set', Math.trunc(w), Math.trunc(h), fullscreen ? 1 : 0);
+        this.pollNative(true);
+        this.save.display.mode = fullscreen ? 'fullscreen' : 'window';
+        if (w >= 640 && h >= 360) {
+            this.save.display.width = Math.trunc(w);
+            this.save.display.height = Math.trunc(h);
         }
         this.persist();
-    };
+        this.displayDirty = true;
+    }
+
+    private chooseDisplay(id: string): void {
+        if (id === 'display-full') {
+            const c = this.preferredChoice();
+            this.commitDisplay(c.width, c.height, true);
+            return;
+        }
+        if (id === 'display-window') {
+            const c = this.preferredChoice();
+            this.commitDisplay(c.width, c.height, false);
+            return;
+        }
+        for (const c of this.displayChoicesOf(this.nativeInfo)) {
+            if (id === 'res-' + c.id) {
+                this.commitDisplay(c.width, c.height, false);
+                return;
+            }
+        }
+    }
+
+    private isFullscreen(): boolean {
+        const info = this.readNative();
+        if (info) {
+            this.nativeInfo = info;
+            return info.fullscreen;
+        }
+        if (screen.fullScreen()) return true;
+        const doc = (globalThis as { document?: { fullscreenElement?: unknown } }).document;
+        return Boolean(doc && doc.fullscreenElement);
+    }
+
+    private toggleBrowserFullscreen(): void {
+        const p = !this.isFullscreen() ? screen.requestFullScreen() : screen.exitFullScreen();
+        Promise.resolve(p)
+            .then(() => this.focusGame())
+            .catch(() => this.focusGame());
+    }
+
+    private focusGame(): void {
+        const doc = (globalThis as { document?: { getElementById?: (id: string) => { focus?: () => void } | null } }).document;
+        if (!doc || !doc.getElementById) return;
+        const el = doc.getElementById('GameCanvas');
+        if (el && el.focus) el.focus();
+    }
+
+    private applySavedDisplay(): void {
+        const info = this.nativeInfo;
+        if (!info) return;
+        // 启动默认全屏；已经全屏时不再重复提交，避免多余的窗口重建
+        if (!info.fullscreen) {
+            const w = info.screenW > 0 ? info.screenW : info.workW > 0 ? info.workW : 1920;
+            const h = info.screenH > 0 ? info.screenH : info.workH > 0 ? info.workH : 1080;
+            this.commitDisplay(w, h, true);
+        }
+        this.save.display.mode = 'fullscreen';
+        this.persist();
+    }
+
+    /* ------------------------------ 存档 / 音效 ------------------------------ */
+
+    private loadSave(): SaveData {
+        try {
+            const raw = sys.localStorage.getItem(STORAGE_KEY);
+            return raw ? sanitizeSave(JSON.parse(raw)) : defaultSave();
+        } catch (err) {
+            void err;
+            return defaultSave();
+        }
+    }
+
+    private persist(): void {
+        try {
+            sys.localStorage.setItem(STORAGE_KEY, JSON.stringify(this.save));
+        } catch (err) {
+            void err; // 忽略写入失败
+        }
+    }
+
+    private play(name: string): void {
+        if (!this.tones.enabled) return;
+        if (sys.isBrowser || !this.clips.has(name)) {
+            this.tones.play(name);
+            return;
+        }
+        const clip = this.clips.get(name);
+        if (clip && this.audio) this.audio.playOneShot(clip, 1);
+    }
+
+    private loadClips(): void {
+        let pending = SOUND_KEYS.length;
+        let loaded = 0;
+        for (const key of SOUND_KEYS) {
+            resources.load('audio/' + key, AudioClip, (err: any, clip: any) => {
+                pending -= 1;
+                if (!err && clip) {
+                    this.clips.set(key, clip);
+                    loaded += 1;
+                }
+                if (pending === 0 && loaded > 0) this.soundAvailable = true;
+            });
+        }
+    }
+
+    private preventBrowserScroll(): void {
+        const g = globalThis as {
+            addEventListener?: (type: string, fn: (e: { code?: string; preventDefault?: () => void }) => void) => void;
+        };
+        if (!g.addEventListener) return;
+        g.addEventListener('keydown', (e) => {
+            if (
+                e.code === 'Space' ||
+                e.code === 'ArrowUp' ||
+                e.code === 'ArrowDown' ||
+                e.code === 'ArrowLeft' ||
+                e.code === 'ArrowRight'
+            ) {
+                if (e.preventDefault) e.preventDefault();
+            }
+        });
+    }
+
+    /* ------------------------------ 游戏事件 ------------------------------ */
 
     private onEvents(events: WorldEvent[]): void {
         for (const ev of events) {
-            if (ev.type === 'eat' && ev.kind && ev.x !== undefined && ev.y !== undefined && this.world) {
-                this.fxEat(ev.kind, ev.x, ev.y, ev.amount ?? 0);
+            if (ev.type === 'eat' && ev.kind && ev.x !== undefined && this.world) {
+                this.fxEat(ev.kind, ev.x, ev.y as number, ev.amount ?? 0);
                 this.scoreHot = 0.16;
                 this.happy = 0.28;
                 this.tongueFlick = 0.001;
-                const sound: Record<FoodKind, string> = { berry: 'eat', star: 'star', slow: 'slow', mult: 'mult' };
+                const sound: Record<string, string> = { berry: 'eat', star: 'star', slow: 'slow', mult: 'mult' };
                 this.play(sound[ev.kind]);
             } else if (ev.type === 'die') {
                 this.rememberScore();
@@ -979,34 +1359,21 @@ export class GameApp extends Component {
     }
 
     private rememberScore(): void {
-        if (this.recorded || !this.world) {
-            return;
-        }
+        if (this.recorded || !this.world) return;
         this.recorded = true;
         const score = this.world.score;
         const mode = this.world.mode;
         this.resultScore = score;
         this.resultLen = this.world.snake.length;
         this.resultMode = mode;
-        const modeBest = this.save.best_by_mode[mode] ?? 0;
+        const modeBest = this.save.best_by_mode[mode] || 0;
         this.newRecord = score > 0 && score > this.save.best;
         this.newModeRecord = score > 0 && score > modeBest;
-        if (score <= 0) {
-            return;
-        }
-        if (score > this.save.best) {
-            this.save.best = score;
-        }
-        if (score > modeBest) {
-            this.save.best_by_mode[mode] = score;
-        }
-        const row: HistoryItem = {
-            score,
-            time: stampNow(),
-            mode,
-            length: this.resultLen,
-        };
-        this.save.history = [row, ...this.save.history].slice(0, 10);
+        if (score <= 0) return;
+        if (score > this.save.best) this.save.best = score;
+        if (score > modeBest) this.save.best_by_mode[mode] = score;
+        const row = { score, time: stampNow(), mode, length: this.resultLen };
+        this.save.history = [row, ...this.save.history].slice(0, HISTORY_MAX);
         this.persist();
     }
 
@@ -1019,45 +1386,41 @@ export class GameApp extends Component {
     }
 
     private fxEat(kind: FoodKind, x: number, y: number, amount: number): void {
-        if (!this.world) {
-            return;
-        }
-        const [px, py] = cellCenter(x, y, this.grid.cell, this.grid.rows);
+        if (!this.world) return;
+        const p = cellCenter(x, y, this.grid.cell, this.grid.rows);
         const color = { berry: BERRY, star: GOLD, slow: CYAN, mult: VIOLET }[kind];
-        this.fx.burst(px, py, color, kind === 'berry' ? 10 : 14, 180);
-        this.fx.burst(px, py, '#fff6fb', 5, 90, 0.28);
-        this.fx.ring(px, py, color);
-        const text = kind === 'slow' ? '慢动作' : kind === 'mult' ? '双倍' : `+${amount}`;
-        const col = kind === 'berry' ? TEXT : kind === 'star' ? GOLD : kind === 'slow' ? CYAN : VIOLET;
-        this.fx.popup(px, py, text, col);
+        this.fx.burst(p[0], p[1], color, kind === 'berry' ? 10 : 14, 180);
+        this.fx.burst(p[0], p[1], '#fff6fb', 5, 90, 0.28);
+        this.fx.ring(p[0], p[1], color);
+        const text = kind === 'slow' ? '慢动作' : kind === 'mult' ? '双倍' : '+' + amount;
+        const tint = kind === 'berry' ? TEXT : kind === 'star' ? GOLD : kind === 'slow' ? CYAN : VIOLET;
+        this.fx.popup(p[0], p[1], text, tint);
     }
 
     private fxDeath(): void {
-        if (!this.world) {
-            return;
-        }
+        if (!this.world) return;
         const step = this.world.snake.length < 14 ? 1 : 2;
         for (let i = 0; i < this.world.snake.length; i += step) {
-            const [x, y] = cellCenter(this.world.snake[i][0], this.world.snake[i][1], this.grid.cell, this.grid.rows);
-            this.fx.burst(x, y, BODY_A, 4, 120, 0.5);
+            const p = cellCenter(this.world.snake[i][0], this.world.snake[i][1], this.grid.cell, this.grid.rows);
+            this.fx.burst(p[0], p[1], BODY_A, 4, 120, 0.5);
         }
-        const [hx, hy] = this.world.snake[0];
-        const [dx, dy] = this.world.deathFace;
-        const [ix, iy] = cellCenter(hx + dx, hy + dy, this.grid.cell, this.grid.rows);
-        this.fx.burst(ix, iy, BERRY, 16, 220, 0.55);
-        this.fx.ring(ix, iy, '#ffffff');
+        const head = this.world.snake[0];
+        const face = this.world.deathFace;
+        const p = cellCenter(head[0] + face[0], head[1] + face[1], this.grid.cell, this.grid.rows);
+        this.fx.burst(p[0], p[1], BERRY, 16, 220, 0.55);
+        this.fx.ring(p[0], p[1], '#ffffff');
     }
 
     private fxRecord(): void {
         for (let i = 0; i < 24; i++) {
             this.fx.particles.push({
                 x: 24 + Math.random() * Math.max(1, this.grid.w - 48),
-                y: this.grid.h + 8 + Math.random() * 30,
-                vx: -20 + Math.random() * 40,
-                vy: -(70 + Math.random() * 90),
+                y: this.grid.h + 8 + 30 * Math.random(),
+                vx: 40 * Math.random() - 20,
+                vy: -(70 + 90 * Math.random()),
                 life: 0.9,
                 age: 0,
-                r: 1.8 + Math.random() * 1.4,
+                r: 1.8 + 1.4 * Math.random(),
                 vr: 0,
                 color: GOLD,
                 kind: 'dot',
@@ -1066,17 +1429,12 @@ export class GameApp extends Component {
     }
 
     private blinking(): boolean {
-        if (this.world && !this.world.alive) {
-            return true;
-        }
+        if (!this.world || !this.world.alive) return true;
         return this.clock % 4.2 < 0.12;
     }
 
     private pulse(): number {
-        if (this.happy <= 0) {
-            return 1;
-        }
-        return 1 + 0.08 * (this.happy / 0.28);
+        return this.happy <= 0 ? 1 : 1 + (this.happy / 0.28) * 0.08;
     }
 
     private advanceTongue(dt: number): void {
@@ -1087,271 +1445,36 @@ export class GameApp extends Component {
         if (this.tongueFlick > 0) {
             this.tongueFlick += dt;
             const t = this.tongueFlick;
-            if (t < 0.08) {
-                this.tongue = t / 0.08;
-            } else if (t < 0.2) {
-                this.tongue = 1;
-            } else if (t < 0.3) {
-                this.tongue = 1 - (t - 0.2) / 0.1;
-            } else {
+            if (t < 0.08) this.tongue = t / 0.08;
+            else if (t < 0.2) this.tongue = 1;
+            else if (t < 0.3) this.tongue = 1 - (t - 0.2) / 0.1;
+            else {
                 this.tongue = 0;
                 this.tongueFlick = 0;
-                this.tongueWait = 1.4 + Math.random() * 2.2;
+                this.tongueWait = 1.4 + 2.2 * Math.random();
             }
-            return;
-        }
-        this.tongueWait -= dt;
-        if (this.tongueWait <= 0) {
-            this.tongueFlick = 0.001;
-        }
-    }
-
-    private play(name: string): void {
-        if (!this.tones.enabled) {
-            return;
-        }
-        if (sys.isBrowser || !this.clips.has(name)) {
-            this.tones.play(name);
-            return;
-        }
-        const clip = this.clips.get(name);
-        if (clip && this.audio) {
-            this.audio.playOneShot(clip, 1);
-        }
-    }
-
-    private loadClips(): void {
-        let left = TONE_NAMES.length;
-        let ok = 0;
-        for (const name of TONE_NAMES) {
-            resources.load(`audio/${name}`, AudioClip, (err, clip) => {
-                left -= 1;
-                if (!err && clip) {
-                    this.clips.set(name, clip);
-                    ok += 1;
-                }
-                if (left === 0 && ok > 0) {
-                    this.soundAvailable = true;
-                }
-            });
-        }
-    }
-
-    private loadSave(): SaveData {
-        try {
-            const raw = sys.localStorage.getItem(STORAGE_KEY);
-            if (!raw) {
-                return defaultSave();
-            }
-            return sanitizeSave(JSON.parse(raw));
-        } catch {
-            return defaultSave();
-        }
-    }
-
-    private persist(): void {
-        try {
-            sys.localStorage.setItem(STORAGE_KEY, JSON.stringify(this.save));
-        } catch {
-            // 写不进存档时这一局照样能玩。
-        }
-    }
-
-    private preventBrowserScroll(): void {
-        const target = globalThis as unknown as {
-            addEventListener?: (type: string, fn: (ev: { code?: string; preventDefault: () => void }) => void, opts?: boolean) => void;
-        };
-        target.addEventListener?.('keydown', (ev) => {
-            if (ev.code === 'Space' || ev.code === 'F11' || ev.code === 'ArrowUp' || ev.code === 'ArrowDown' || ev.code === 'ArrowLeft' || ev.code === 'ArrowRight') {
-                ev.preventDefault();
-            }
-        });
-    }
-
-    private isFullscreen(): boolean {
-        const native = this.readNative();
-        if (native) {
-            this.nativeInfo = native;
-            return native.fullscreen;
-        }
-        if (screen.fullScreen()) {
-            return true;
-        }
-        const doc = (globalThis as unknown as { document?: { fullscreenElement?: unknown } }).document;
-        return Boolean(doc && doc.fullscreenElement);
-    }
-
-    private onFullscreenKey(): void {
-        const native = this.readNative();
-        if (native) {
-            // Windows 上 F11 已由原生层切换，并在切完后把键盘焦点还回窗口。这里只记下结果。
-            this.nativeInfo = native;
-            this.rememberNative(native);
-            return;
-        }
-        this.toggleBrowserFullscreen();
-    }
-
-    private toggleFullscreen(): void {
-        if (this.readNative()) {
-            const choice = this.preferredChoice();
-            this.commitDisplay(choice.width, choice.height, !this.isFullscreen());
-            return;
-        }
-        this.toggleBrowserFullscreen();
-    }
-
-    private toggleBrowserFullscreen(): void {
-        const enter = !this.isFullscreen();
-        const pending = enter ? screen.requestFullScreen() : screen.exitFullScreen();
-        Promise.resolve(pending).then(() => this.focusGame()).catch(() => this.focusGame());
-    }
-
-    private focusGame(): void {
-        const doc = (globalThis as unknown as { document?: { getElementById?: (id: string) => { focus?: () => void } | null } }).document;
-        doc?.getElementById?.('GameCanvas')?.focus?.();
-    }
-
-    private pixelScale(): number {
-        const scale = view.getScaleY();
-        if (!Number.isFinite(scale) || scale <= 1.05) {
-            return 1;
-        }
-        return Math.min(2, scale);
-    }
-
-    private glyphScale(size: number): number {
-        const safe = Math.max(8, size);
-        const fontSize = Math.max(8, Math.min(64, Math.round(safe * this.pixelScale())));
-        return fontSize / safe;
-    }
-
-    private bridge(): { snakeDisplay?: (op: string, w?: number, h?: number, full?: number) => string } | null {
-        const host = globalThis as unknown as { jsb?: { snakeDisplay?: (op: string, w?: number, h?: number, full?: number) => string } };
-        return host.jsb?.snakeDisplay ? host.jsb : null;
-    }
-
-    private readNative(): NativeDisplay | null {
-        const raw = this.bridge()?.snakeDisplay?.('state', 0, 0, 0);
-        if (!raw) {
-            return null;
-        }
-        return parseNativeDisplay(raw);
-    }
-
-    private displayChoices() {
-        const info = this.nativeInfo;
-        if (!info || info.workW < 640 || info.workH < 360) {
-            return [];
-        }
-        return windowChoices({ workW: info.workW, workH: info.workH, screenW: info.screenW, screenH: info.screenH });
-    }
-
-    private preferredChoice(): { width: number; height: number } {
-        const choices = this.displayChoices();
-        const saved = this.save.display;
-        if (saved.width < 640 || saved.height < 360) {
-            const auto = choices.find((item) => item.id === 'auto') ?? choices[0];
-            if (auto) {
-                return auto;
-            }
-        }
-        const picked = pickSavedWindow(saved.width || this.nativeInfo?.width || 1280, saved.height || this.nativeInfo?.height || 720, choices);
-        if (picked) {
-            return picked;
-        }
-        return { width: this.nativeInfo?.width || 1280, height: this.nativeInfo?.height || 720 };
-    }
-
-    private rememberNative(native: NativeDisplay): void {
-        if (native.fullscreen) {
-            this.save.display.mode = 'fullscreen';
         } else {
-            this.save.display.mode = 'window';
-            if (native.width > 0 && native.height > 0) {
-                this.save.display.width = native.width;
-                this.save.display.height = native.height;
-            }
-        }
-        this.persist();
-    }
-
-    private commitDisplay(width: number, height: number, fullscreen: boolean): void {
-        const call = this.bridge()?.snakeDisplay;
-        if (!call) {
-            if (fullscreen) {
-                this.toggleBrowserFullscreen();
-            } else if (this.isFullscreen()) {
-                this.toggleBrowserFullscreen();
-            }
-            return;
-        }
-        call('set', Math.trunc(width), Math.trunc(height), fullscreen ? 1 : 0);
-        const native = this.readNative();
-        if (native) {
-            this.nativeInfo = native;
-        }
-        // 窗口变化要等下一帧的事件循环才真正执行，这里记下玩家选的尺寸。
-        if (fullscreen) {
-            this.save.display.mode = 'fullscreen';
-        } else {
-            this.save.display.mode = 'window';
-        }
-        if (width >= 640 && height >= 360) {
-            this.save.display.width = Math.trunc(width);
-            this.save.display.height = Math.trunc(height);
-        }
-        this.persist();
-    }
-
-    private applySavedDisplay(): void {
-        const info = this.nativeInfo;
-        if (!info) {
-            return;
-        }
-        const saved = this.save.display;
-        if (saved.mode === 'fullscreen') {
-            const choice = this.preferredChoice();
-            this.commitDisplay(choice.width, choice.height, true);
-            return;
-        }
-        if (saved.width >= 640 && saved.height >= 360) {
-            const choice = this.preferredChoice();
-            if (choice.width !== info.width || choice.height !== info.height || info.fullscreen) {
-                this.commitDisplay(choice.width, choice.height, false);
-            }
-        }
-    }
-
-    private chooseDisplay(id: string): void {
-        if (id === 'display-full') {
-            const choice = this.preferredChoice();
-            this.commitDisplay(choice.width, choice.height, true);
-            return;
-        }
-        if (id === 'display-window') {
-            const choice = this.preferredChoice();
-            this.commitDisplay(choice.width, choice.height, false);
-            return;
-        }
-        const choice = this.displayChoices().find((item) => id === `res-${item.id}`);
-        if (choice) {
-            this.commitDisplay(choice.width, choice.height, false);
+            this.tongueWait -= dt;
+            if (this.tongueWait <= 0) this.tongueFlick = 0.001;
         }
     }
 
     private stepSmoke(): void {
         if (this.smokeStep === 1 && this.clock > 1) {
             this.smokeStep = 2;
-            this.displayOpen = true;
-            const choice = this.displayChoices().find((item) => item.width === 1280 && item.height === 720) ?? this.preferredChoice();
-            this.commitDisplay(choice.width, choice.height, false);
-            this.bridge()?.snakeDisplay?.('mark', choice.width, choice.height, 0);
+            this.settingsOpen = true;
+            this.settingsTab = 'display';
+            const choices = this.displayChoicesOf(this.nativeInfo);
+            const pick = choices.find((c) => c.width === 1280 && c.height === 720) ?? this.preferredChoice();
+            this.commitDisplay(pick.width, pick.height, false);
+            const b = this.bridge();
+            if (b && b.snakeDisplay) b.snakeDisplay('mark', pick.width, pick.height, 0);
         } else if (this.smokeStep === 2 && this.clock > 2.2) {
             this.smokeStep = 3;
-            const choice = this.preferredChoice();
-            this.commitDisplay(choice.width, choice.height, true);
-            this.bridge()?.snakeDisplay?.('mark', choice.width, choice.height, 1);
+            const c = this.preferredChoice();
+            this.commitDisplay(c.width, c.height, true);
+            const b = this.bridge();
+            if (b && b.snakeDisplay) b.snakeDisplay('mark', c.width, c.height, 1);
         }
     }
 }

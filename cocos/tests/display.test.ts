@@ -7,8 +7,9 @@ import { chromeBoxes, layoutChrome, type UiModel } from '../assets/scripts/logic
 function model(extra: Partial<UiModel> = {}): UiModel {
     return {
         phase: 'menu',
-        help: false,
-        historyOpen: false,
+        settingsOpen: false,
+        settingsTab: 'display',
+        confirmQuit: false,
         selectedMode: 'classic',
         pendingMode: null,
         activeMode: 'classic',
@@ -17,7 +18,6 @@ function model(extra: Partial<UiModel> = {}): UiModel {
         bestByMode: { classic: 120, zen: 40, challenge: 90 },
         lengthText: '—',
         buff: '',
-        speed: 5,
         soundOn: true,
         soundAvailable: true,
         resultScore: 0,
@@ -30,7 +30,6 @@ function model(extra: Partial<UiModel> = {}): UiModel {
         mobile: false,
         scoreHot: false,
         confirmClear: false,
-        displayOpen: false,
         displayChoices: [],
         displayMode: 'window',
         displayWidth: 1280,
@@ -80,23 +79,28 @@ function assertInside(W: number, H: number, extra: Partial<UiModel> = {}): void 
     }
 }
 
-test('window choices stay inside the work area', () => {
+test('window choices stay inside the screen', () => {
     const laptop: MonitorInfo = { workW: 1920, workH: 1040, screenW: 1920, screenH: 1080 };
     const choices = windowChoices(laptop);
     assert.deepEqual(fitWorkArea(laptop), { width: 1848, height: 1038 });
-    assert.deepEqual(choices.map((choice) => choice.id), ['auto', '960x540', '1280x720', '1600x900']);
+    // 允许选到整块屏幕的尺寸（2560×1600 这类原生分辨率需要它），但不能超过屏幕
+    assert.deepEqual(choices.map((choice) => choice.id), ['auto', '960x540', '1280x720', '1600x900', '1920x1080']);
     for (const choice of choices) {
-        assert.equal(choiceFits(choice.width, choice.height, laptop), true);
+        assert.ok(choice.width >= 640 && choice.height >= 360);
+        assert.ok(choice.width <= laptop.screenW && choice.height <= laptop.screenH);
     }
+    // choiceFits 仍然只描述“能否放进任务栏工作区”
     assert.equal(choiceFits(1920, 1080, laptop), false);
     const desktop: MonitorInfo = { workW: 2560, workH: 1400, screenW: 2560, screenH: 1440 };
-    assert.equal(windowChoices(desktop).some((choice) => choice.width === 2560), false);
+    assert.equal(windowChoices(desktop).some((choice) => choice.width === 2560), true);
     assert.equal(windowChoices(desktop).some((choice) => choice.width === 1920), true);
+    const tall: MonitorInfo = { workW: 2560, workH: 1528, screenW: 2560, screenH: 1600 };
+    assert.equal(windowChoices(tall).some((choice) => choice.id === '2560x1600'), true);
     const tiny: MonitorInfo = { workW: 800, workH: 600, screenW: 800, screenH: 600 };
     const fitted = windowChoices(tiny);
     assert.equal(fitted.length, 1);
     assert.ok(fitted[0].width <= 800 && fitted[0].height <= 600);
-    assert.equal(pickSavedWindow(1920, 1080, choices)?.id, '1600x900');
+    assert.equal(pickSavedWindow(1920, 1080, choices)?.id, '1920x1080');
     assert.equal(pickSavedWindow(1280, 720, choices)?.id, '1280x720');
 });
 
@@ -129,9 +133,10 @@ test('controls stay on screen at desktop, window, and phone sizes', () => {
     for (const [w, h] of sizes) {
         assertInside(w, h);
         assertInside(w, h, { phase: 'playing', buff: '慢动作 3.2s   双倍 ×2', score: 80, lengthText: '16' });
-        assertInside(w, h, { help: true });
+        assertInside(w, h, { settingsOpen: true });
         assertInside(w, h, {
-            displayOpen: true,
+            settingsOpen: true,
+            settingsTab: 'display',
             displayChoices: windowChoices({ workW: 1920, workH: 1040, screenW: 1920, screenH: 1080 }),
             displayMode: 'window',
         });

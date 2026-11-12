@@ -18,9 +18,9 @@ export const MODE_NAME: Record<Mode, string> = {
 };
 
 export const MODE_BLURB: Record<Mode, string> = {
-    classic: '撞墙结束，速度完全由滑条决定',
+    classic: '撞墙结束，节奏稳定',
     zen: '穿墙环绕，节奏更从容',
-    challenge: '撞墙结束，越吃越快，特殊果更多',
+    challenge: '撞墙结束，越吃越快',
 };
 
 export const MODE_COLOR: Record<Mode, string> = {

@@ -120,7 +120,7 @@ test('multiplier charges', () => {
         const [dx, dy] = world.direction;
         world.berry = [x + dx, y + dy];
         world.special = null;
-        const before = world.score;
+        const before: number = world.score;
         world.step();
         assert.equal(world.score - before, 20);
         assert.equal(world.multLeft, expected);

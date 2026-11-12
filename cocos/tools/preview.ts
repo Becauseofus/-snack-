@@ -11,8 +11,9 @@ const H = 720;
 
 const model: UiModel = {
     phase: 'playing',
-    help: false,
-    historyOpen: false,
+    settingsOpen: false,
+    settingsTab: 'display',
+    confirmQuit: false,
     selectedMode: 'classic',
     pendingMode: null,
     activeMode: 'classic',
@@ -21,7 +22,6 @@ const model: UiModel = {
     bestByMode: { classic: 120, zen: 40, challenge: 90 },
     lengthText: '16',
     buff: '慢动作 3.2s   双倍 ×2',
-    speed: 5,
     soundOn: true,
     soundAvailable: true,
     resultScore: 0,
@@ -34,7 +34,6 @@ const model: UiModel = {
     mobile: false,
     scoreHot: false,
     confirmClear: false,
-    displayOpen: false,
     displayChoices: [],
     displayMode: 'window',
     displayWidth: 1280,
@@ -96,7 +95,6 @@ const field = ${JSON.stringify(chrome.field)};
 const worldCmds = ${JSON.stringify(frame.cmds)};
 const labels = ${JSON.stringify(chrome.labels)};
 const buttons = ${JSON.stringify(chrome.buttons)};
-const slider = ${JSON.stringify(chrome.slider)};
 const canvas = document.getElementById('c');
 const ctx = canvas.getContext('2d');
 ctx.lineJoin = 'round';
@@ -120,11 +118,11 @@ function path(pts, ox, oy) {
 }
 function paint(cmds, ox, oy) {
   for (const c of cmds) {
-    if ((c.op === 'poly' || c.op === 'line') && c.pts) {
+    if ((c.op === 'poly' || c.op === 'line' || c.op === 'stroke') && c.pts) {
       path(c.pts, ox, oy);
       if (c.op === 'poly') ctx.closePath();
       if (c.fill) { ctx.fillStyle = c.fill; ctx.fill(); }
-      if (c.stroke || c.op === 'line') {
+      if (c.stroke || c.op === 'line' || c.op === 'stroke') {
         ctx.strokeStyle = c.stroke || '#fff';
         ctx.lineWidth = c.sw || 1;
         path(c.pts, ox, oy);
@@ -160,22 +158,6 @@ for (const b of buttons) {
   ctx.textBaseline = 'middle';
   ctx.fillText(b.text, x, Y(y));
 }
-const t = (slider.value - 1) / 9;
-ctx.beginPath();
-ctx.roundRect(slider.x - slider.w / 2, Y(slider.y) - slider.h / 2, slider.w, slider.h, slider.h / 2);
-ctx.fillStyle = '#3a2a70';
-ctx.fill();
-ctx.beginPath();
-ctx.roundRect(slider.x - slider.w / 2, Y(slider.y) - slider.h / 2, Math.max(slider.h, slider.w * t), slider.h, slider.h / 2);
-ctx.fillStyle = '#ff7eb6';
-ctx.fill();
-ctx.beginPath();
-ctx.arc(slider.x - slider.w / 2 + slider.w * t, Y(slider.y), 9, 0, Math.PI * 2);
-ctx.fillStyle = '#fff6fb';
-ctx.fill();
-ctx.strokeStyle = '#ff7eb6';
-ctx.lineWidth = 2;
-ctx.stroke();
 for (const lab of labels) {
   const x = lab.parent === 'field' ? field.x + lab.x : lab.x;
   const y = lab.parent === 'field' ? field.y + lab.y : lab.y;

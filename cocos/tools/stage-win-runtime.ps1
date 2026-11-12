@@ -70,3 +70,17 @@ if ($webp) {
     Write-Host "Removing libwebpmux.dll. It imports webp.dll, which this engine does not ship, and Snake.exe does not import it."
     Remove-Item (Join-Path $Stage "libwebpmux.dll") -Force
 }
+
+# Turn off the Cocos splash screen. Otherwise the game shows a windowed logo
+# for two seconds and only then switches to fullscreen.
+# Only the two splash numbers are touched, everything else stays as built.
+$settingsPath = Join-Path $Stage "Resources\src\settings.json"
+if (Test-Path $settingsPath) {
+    $text = [System.IO.File]::ReadAllText($settingsPath)
+    $patched = $text -replace '("splashScreen"\s*:\s*\{[^{}]*?"displayRatio"\s*:\s*)[0-9.]+', '${1}0'
+    $patched = $patched -replace '("splashScreen"\s*:\s*\{[^{}]*?"totalTime"\s*:\s*)[0-9.]+', '${1}0'
+    if ($patched -ne $text) {
+        [System.IO.File]::WriteAllText($settingsPath, $patched, (New-Object System.Text.UTF8Encoding($false)))
+        Write-Host "Disabled the Cocos splash screen"
+    }
+}

@@ -396,8 +396,10 @@ void snakeFlushDisplay() {
             gSnakeApply = true;
             gSnakeApplyW = pickW;
             gSnakeApplyH = pickH;
-            gSnakeApplyFull = 0;
-            snakeLogLine("queued default " + std::to_string(pickW) + "x" + std::to_string(pickH));
+            // 启动即全屏：原生在第一帧就切全屏，避免先出现窗口再放大的跳变。
+            // 想回到窗口模式可以在游戏内设置里切换，下次启动仍会默认全屏。
+            gSnakeApplyFull = 1;
+            snakeLogLine("queued default fullscreen " + std::to_string(pickW) + "x" + std::to_string(pickH));
         }
     }
     if (!gSnakeApply && !gSnakeToggle && !gSnakeMark) {
