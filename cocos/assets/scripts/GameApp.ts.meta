@@ -1,0 +1,13 @@
+{
+  "ver": "4.0.24",
+  "importer": "typescript",
+  "imported": true,
+  "uuid": "5f1a0c2e-7b34-4d91-9e6a-3c8b1d4f2a70",
+  "files": [],
+  "subMetas": {},
+  "userData": {
+    "moduleId": "project:///assets/scripts/GameApp.js",
+    "importerSettings": 4,
+    "simulateGlobals": []
+  }
+}

@@ -1,0 +1,8 @@
+library/
+temp/
+local/
+build/
+profiles/
+native/
+build-web.log
+build-windows.log

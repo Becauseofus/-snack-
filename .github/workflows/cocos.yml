@@ -1,0 +1,272 @@
+name: Cocos Creator
+
+# Cocos Creator 3.8.6 的命令行构建在传入 --build 时会调用
+# Editor.Startup.manager(skipLogin = true)，不走 Dashboard 登录。
+# 编辑器 zip 可从官方 CDN 匿名下载。Windows 托管 runner 自带桌面会话，
+# 满足官方文档里「命令行也需要 GUI 环境」这一条。
+# 打开编辑器界面本身仍可能要求 Cocos 账号，或在 Dashboard 启动参数里加 --nologin。
+
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - cocos-creator
+      - main
+    tags:
+      - "cocos-v*"
+
+permissions:
+  contents: write
+  pages: write
+  id-token: write
+
+concurrency:
+  group: cocos-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  web-mobile:
+    runs-on: windows-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Cocos Creator 3.8.6
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $dest = "C:\cocos-creator-3.8.6"
+          if (-not (Test-Path "$dest\CocosCreator.exe")) {
+            $zip = "$env:RUNNER_TEMP\CocosCreator-v3.8.6-win-032501.zip"
+            $url = "https://download.cocos.com/CocosCreator/v3.8.6/CocosCreator-v3.8.6-win-032501.zip"
+            Write-Host "Downloading $url"
+            Invoke-WebRequest -Uri $url -OutFile $zip
+            if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
+            New-Item -ItemType Directory -Force -Path $dest | Out-Null
+            Expand-Archive -Path $zip -DestinationPath $dest
+            Remove-Item $zip
+          }
+          Get-Item "$dest\CocosCreator.exe" | Select-Object FullName, Length
+
+      - name: Build web-mobile
+        shell: cmd
+        run: |
+          setlocal
+          set EXE=C:\cocos-creator-3.8.6\CocosCreator.exe
+          set PROJ=%CD%\cocos
+          "%EXE%" --nologin --project "%PROJ%" --build "platform=web-mobile;debug=false;startScene=7c3e9a10-4b28-4f6d-8a15-2e9d0c6b4f31;outputName=web-mobile;name=Snake;buildPath=project://build"
+          set CODE=%ERRORLEVEL%
+          echo Creator exit code %CODE%
+          if exist "%PROJ%\build\web-mobile\index.html" echo web-mobile index.html ok
+          if "%CODE%"=="36" exit /b 0
+          if "%CODE%"=="0" if exist "%PROJ%\build\web-mobile\index.html" exit /b 0
+          exit /b %CODE%
+
+      - name: Upload web-mobile artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: web-mobile
+          path: cocos/build/web-mobile
+          if-no-files-found: error
+
+      - name: Upload GitHub Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: cocos/build/web-mobile
+
+  deploy-pages:
+    needs: web-mobile
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Create the Pages site when the token is allowed to
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set +e
+          gh api --method POST -H "Accept: application/vnd.github+json" \
+            "/repos/${{ github.repository }}/pages" \
+            -f build_type=workflow
+          code=$?
+          if [ "$code" -ne 0 ]; then
+            echo "GitHub Pages 还没在这个仓库里打开。需要仓库管理员到 Settings → Pages，Source 选 GitHub Actions。这一步是仓库设置，不是 Cocos 登录。"
+          fi
+          exit 0
+
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
+
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Cocos Creator 3.8.6
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $dest = "C:\cocos-creator-3.8.6"
+          if (-not (Test-Path "$dest\CocosCreator.exe")) {
+            $zip = "$env:RUNNER_TEMP\CocosCreator-v3.8.6-win-032501.zip"
+            $url = "https://download.cocos.com/CocosCreator/v3.8.6/CocosCreator-v3.8.6-win-032501.zip"
+            Invoke-WebRequest -Uri $url -OutFile $zip
+            New-Item -ItemType Directory -Force -Path $dest | Out-Null
+            Expand-Archive -Path $zip -DestinationPath $dest
+            Remove-Item $zip
+          }
+          Get-Item "$dest\CocosCreator.exe" | Select-Object FullName, Length
+
+      - name: Point Creator at the runner CMake
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $cmake = Get-Command cmake -ErrorAction SilentlyContinue
+          if (-not $cmake) { throw "This runner has no CMake on PATH, so the Windows project cannot be generated." }
+          & $cmake.Source --version
+          $srcRoot = Split-Path (Split-Path $cmake.Source -Parent) -Parent
+          if (-not (Test-Path (Join-Path $srcRoot "bin\cmake.exe"))) {
+            $srcRoot = Split-Path $cmake.Source -Parent
+          }
+          $dest = "C:\cocos-creator-3.8.6\resources\tools\cmake"
+          Write-Host "Replacing $dest with $srcRoot"
+          if (Test-Path $dest) { Remove-Item -Recurse -Force $dest }
+          Copy-Item -Recurse $srcRoot $dest
+          & "$dest\bin\cmake.exe" --version
+
+      - name: Generate Visual Studio project
+        shell: cmd
+        run: |
+          setlocal
+          rem windows-latest 现在装的是 Visual Studio 18 2026，没有 VS 2022。
+          rem 编辑器的生成器列表里没有 VS 18，探测失败后会落到 CMake 默认生成器。
+          set CMAKE_GENERATOR=Visual Studio 18 2026
+          set EXE=C:\cocos-creator-3.8.6\CocosCreator.exe
+          set PROJ=%CD%\cocos
+          "%EXE%" --nologin --project "%PROJ%" --build "configPath=%PROJ%\tools\build-windows.json"
+          set CODE=%ERRORLEVEL%
+          echo Creator exit code %CODE%
+          dir /b "%PROJ%\build\windows\proj"
+          if not exist "%PROJ%\build\windows\proj\CMakeCache.txt" exit /b 1
+          if "%CODE%"=="36" exit /b 0
+          if "%CODE%"=="0" exit /b 0
+          exit /b %CODE%
+
+      - name: Compile Windows package
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $proj = "cocos\build\windows\proj"
+          if (-not (Test-Path "$proj\CMakeCache.txt")) { throw "CMake project was not generated" }
+          Write-Host "Project files:"
+          Get-ChildItem $proj -Name | Write-Host
+          $cmake = "C:\cocos-creator-3.8.6\resources\tools\cmake\bin\cmake.exe"
+          & "$PWD\cocos\tools\patch-win-display.ps1"
+          if ($LASTEXITCODE -ne 0) { throw "Windows display patch failed: $LASTEXITCODE" }
+          & $cmake --build $proj --config Release --parallel 2
+          if ($LASTEXITCODE -ne 0) { throw "cmake --build failed: $LASTEXITCODE" }
+          $exe = Get-ChildItem -Path "cocos\build\windows" -Recurse -Filter "Snake.exe" |
+            Where-Object { $_.FullName -match "\\Release\\" } |
+            Select-Object -First 1
+          if (-not $exe) { throw "Snake.exe was not produced" }
+          Write-Host "Executable $($exe.FullName) $($exe.Length)"
+          $release = $exe.DirectoryName
+          $stage = "release-assets\stage"
+          if (Test-Path $stage) { Remove-Item -Recurse -Force $stage }
+          New-Item -ItemType Directory -Force -Path $stage | Out-Null
+          Get-ChildItem $release -Force | Where-Object {
+            $_.Extension -notin ".pdb", ".ilk", ".exp", ".lib", ".obj", ".iobj", ".ipdb"
+          } | ForEach-Object {
+            Copy-Item $_.FullName -Destination (Join-Path $stage $_.Name) -Recurse -Force
+          }
+          if (-not (Test-Path "$stage\Snake.exe")) { throw "Staged package is missing Snake.exe" }
+          if (-not (Test-Path "$stage\Resources")) { throw "Resources were not copied next to Snake.exe" }
+          & "$PWD\cocos\tools\stage-win-runtime.ps1" -Stage (Resolve-Path $stage).Path
+          if ($LASTEXITCODE -ne 0) { throw "stage-win-runtime failed: $LASTEXITCODE" }
+          & "$PWD\cocos\tools\check-win-imports.ps1" -Stage (Resolve-Path $stage).Path
+          if ($LASTEXITCODE -ne 0) { throw "Windows import check failed: $LASTEXITCODE" }
+          Compress-Archive -Path "$stage\*" -DestinationPath "release-assets\Snake-cocos-win64.zip" -Force
+          Get-Item "release-assets\Snake-cocos-win64.zip" | Select-Object FullName, Length
+          Get-ChildItem $stage -Name | Write-Host
+
+      - name: Build Inno Setup installer
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          $candidates = @(
+            "${env:ProgramFiles(x86)}\Inno Setup 6\ISCC.exe",
+            "$env:ProgramFiles\Inno Setup 6\ISCC.exe"
+          )
+          $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          if (-not $iscc) {
+            choco install innosetup --no-progress -y
+            if ($LASTEXITCODE -ne 0) { throw "choco install innosetup failed: $LASTEXITCODE" }
+            $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
+          }
+          if (-not $iscc) { throw "ISCC.exe was not found after installing Inno Setup" }
+          Write-Host "Using $iscc"
+          $stage = (Resolve-Path "release-assets\stage").Path
+          $out = (Resolve-Path "release-assets").Path
+          & $iscc "/DStage=$stage" "/DOutDir=$out" "cocos\tools\snake.iss"
+          if ($LASTEXITCODE -ne 0) { throw "ISCC failed: $LASTEXITCODE" }
+          $setup = Get-ChildItem -Path . -Recurse -Filter "Snake-cocos-Setup-win64.exe" |
+            Where-Object { $_.FullName -notmatch "\\stage\\" } |
+            Select-Object -First 1
+          if (-not $setup) { throw "Installer was not produced" }
+          $dest = Join-Path $out "Snake-cocos-Setup-win64.exe"
+          if ($setup.FullName -ne $dest) {
+            Move-Item -LiteralPath $setup.FullName -Destination $dest -Force
+          }
+          $setup = Get-Item $dest
+          if ($setup.Length -lt 1000000) { throw "Installer is unexpectedly small: $($setup.Length)" }
+          $setup | Select-Object FullName, Length
+
+      - name: Smoke test installed game
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = "Stop"
+          & "$PWD\cocos\tools\smoke-win.ps1" `
+            -Setup (Resolve-Path "release-assets\Snake-cocos-Setup-win64.exe").Path `
+            -InstallDir "$env:RUNNER_TEMP\snake-smoke" `
+            -OutDir (Join-Path (Resolve-Path "release-assets").Path "smoke")
+          if ($LASTEXITCODE -ne 0) { throw "Windows smoke test failed: $LASTEXITCODE" }
+
+      - name: Upload Windows artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-package
+          path: |
+            release-assets/Snake-cocos-win64.zip
+            release-assets/Snake-cocos-Setup-win64.exe
+            release-assets/smoke/**
+          if-no-files-found: error
+
+      - name: Upload smoke logs
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-smoke
+          path: release-assets/smoke/**
+          if-no-files-found: ignore
+
+      - name: Publish release asset
+        if: startsWith(github.ref, 'refs/tags/cocos-v')
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ github.ref_name }}
+          name: 贪吃蛇 Cocos ${{ github.ref_name }}
+          files: |
+            release-assets/Snake-cocos-win64.zip
+            release-assets/Snake-cocos-Setup-win64.exe
+          fail_on_unmatched_files: true
+          body: |
+            Cocos Creator 3.8 移植的 Windows 64 位包。
+
+            - `Snake-cocos-Setup-win64.exe`：安装向导。可选安装路径，创建桌面和开始菜单快捷方式，并带卸载。
+            - `Snake-cocos-win64.zip`：免安装，解压后运行其中的 `Snake.exe`。

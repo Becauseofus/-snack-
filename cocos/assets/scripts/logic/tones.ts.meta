@@ -1,0 +1,13 @@
+{
+  "ver": "4.0.24",
+  "importer": "typescript",
+  "imported": true,
+  "uuid": "a11c0f10-1c01-4a01-8a01-000000000007",
+  "files": [],
+  "subMetas": {},
+  "userData": {
+    "moduleId": "project:///assets/scripts/logic/tones.js",
+    "importerSettings": 4,
+    "simulateGlobals": []
+  }
+}
