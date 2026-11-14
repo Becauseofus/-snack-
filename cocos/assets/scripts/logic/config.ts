@@ -1,7 +1,7 @@
 /** 与 Python 版对齐的常量、配色和存档清洗。不依赖 Cocos。 */
 
 export const APP_NAME = '贪吃蛇';
-export const APP_VERSION = '2.0.0';
+export const APP_VERSION = '1.0.8';
 export const HISTORY_MAX = 10;
 export const STORAGE_KEY = 'SnakeGame.settings';
 
