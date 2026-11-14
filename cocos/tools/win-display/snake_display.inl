@@ -433,6 +433,22 @@ void snakeLogBoot(SDL_Window* window) {
 
 std::string snakeDisplayCommand(const char* op, int width, int height, int fullscreen) {
     const std::string which = op ? op : "state";
+    if (which.rfind("audio:", 0) == 0) {
+        const std::string key = which.substr(6);
+        if (key != "eat" && key != "star" && key != "slow" && key != "mult" && key != "die" && key != "start" && key != "pause" && key != "record") return "error";
+        // WinMM opens the current Windows default output, including Bluetooth devices.
+        static HMODULE winmm = LoadLibraryW(L"winmm.dll");
+        typedef BOOL (WINAPI *PlayFn)(LPCWSTR, HMODULE, DWORD);
+        static PlayFn play = winmm ? reinterpret_cast<PlayFn>(GetProcAddress(winmm, "PlaySoundW")) : nullptr;
+        wchar_t exe[32768];
+        DWORD count = GetModuleFileNameW(nullptr, exe, 32768);
+        if (!play || !count || count >= 32768) return "error";
+        std::wstring path(exe, count);
+        path = path.substr(0, path.find_last_of(L"\\/")) + L"\\Resources\\audio\\" + std::wstring(key.begin(), key.end()) + L".wav";
+        const bool ok = play(path.c_str(), nullptr, 0x00020000 | 0x0001 | 0x0002);
+        if (!ok) snakeLogLine("audio failed: " + key);
+        return ok ? "ok" : "error";
+    }
     snakeLogLine("js op=" + which + " width=" + std::to_string(width) + " height=" + std::to_string(height) + " fullscreen=" + std::to_string(fullscreen));
     if (which == "set") {
         gSnakeApply = true;

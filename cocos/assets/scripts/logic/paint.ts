@@ -669,6 +669,7 @@ export interface PaintInput {
     tongue: number;
     fx: FX;
     mascot: boolean;
+    hideSnake?: boolean;
     /** 每帧闪烁的星点（由 makeStars 生成，静态层里不重复算） */
     stars?: Star[];
 }
@@ -698,7 +699,7 @@ export function paintField(input: PaintInput): FieldFrame {
     }
 
     const geo = snakePolylines(world, input.lead, cell, cols, rows, input.pulse);
-    if (geo.box.minX < Infinity) {
+    if (!input.hideSnake && geo.box.minX < Infinity) {
         const offsets = wrapOffsets(geo.box, w, h, world.mode === 'zen');
         for (const off of offsets) {
             for (const run of geo.runs) emitRun(cmds, run, off[0], off[1], w, h);

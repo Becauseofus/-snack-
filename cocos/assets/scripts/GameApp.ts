@@ -1,6 +1,10 @@
 import {
     _decorator,
     AudioClip,
+    Sprite,
+    SpriteFrame,
+    Texture2D,
+    Rect,
     AudioSource,
     BlockInputEvents,
     Color,
@@ -46,7 +50,7 @@ import {
 import { FX } from './logic/fx';
 import { displayStatus, parseNativeDisplay, pickSavedWindow, windowChoices, type DisplayChoice, type NativeDisplay } from './logic/display';
 import { layoutChrome, measure, type Chrome, type LabelSpec, type ButtonSpec, type SettingsTab, type UiModel } from './logic/layout';
-import { cellCenter, makeStars, paintBackground, paintField, type DrawCmd, type Star } from './logic/paint';
+import { snakePolylines, cellCenter, makeStars, paintBackground, paintField, type DrawCmd, type Star } from './logic/paint';
 import { SnakeWorld, type WorldEvent } from './logic/SnakeWorld';
 import { toneAvailable, Tones } from './logic/tones';
 
@@ -152,6 +156,10 @@ export class GameApp extends Component {
     private world: SnakeWorld | null = null;
     private fx = new FX();
     private tones = new Tones();
+    private dragonTexture: Texture2D | null = null;
+    private dragonFrames: SpriteFrame[] = [];
+    private dragonNodes: Node[] = [];
+    private dragonLayer: Node | null = null;
     private clips = new Map<string, AudioClip>();
     private audio: AudioSource | null = null;
     private soundAvailable = false;
@@ -215,7 +223,7 @@ export class GameApp extends Component {
         this.save = this.loadSave();
         this.save.speed = GAME_SPEED; // 速度条已移除，统一固定节奏
         this.tones.enabled = this.save.sound;
-        this.soundAvailable = toneAvailable();
+        this.soundAvailable = toneAvailable() || !!this.bridge();
         this.node.layer = Layers.Enum.UI_2D;
         view.setDesignResolutionSize(1280, 720, ResolutionPolicy.SHOW_ALL);
         view.resizeWithBrowserSize(true);
@@ -228,6 +236,14 @@ export class GameApp extends Component {
         if (sys.isNative) this.loadClips();
 
         this.ensureNodes();
+        resources.load('skins/dragon/texture', Texture2D, (err, texture) => {
+            if (err) { console.error('Dragon skin load failed', err); return; }
+            this.dragonTexture = texture;
+            for (const r of [[100, 15, 540, 590], [830, 160, 210, 70], [830, 650, 210, 580]]) {
+                const frame = new SpriteFrame(); frame.texture = texture; frame.rect = new Rect(...r as [number, number, number, number]);
+                this.dragonFrames.push(frame);
+            }
+        });
         input.on(Input.EventType.KEY_DOWN, this.onKey, this);
         view.on('canvas-resize', this.onResize, this);
         game.on(Game.EVENT_HIDE, this.onHide, this);
@@ -309,6 +325,8 @@ export class GameApp extends Component {
         this.fieldNode.addChild(dynNode);
         this.fieldDyn = dynNode.addComponent(Graphics);
 
+        this.dragonLayer = makeNode('dragon');
+        this.fieldNode.addChild(this.dragonLayer);
         const cardNode = makeNode('field-cards');
         this.fieldNode.addChild(cardNode);
         this.fieldCards = cardNode.addComponent(Graphics);
@@ -382,6 +400,7 @@ export class GameApp extends Component {
         const info = this.nativeInfo;
         return {
             phase: this.phase,
+            skin: this.save.skin,
             settingsOpen: this.settingsOpen,
             settingsTab: this.settingsTab,
             confirmClear: this.confirmClear,
@@ -421,6 +440,7 @@ export class GameApp extends Component {
             model.activeMode,
             model.selectedMode,
             model.pendingMode,
+            model.skin,
             model.settingsOpen,
             model.settingsTab,
             model.confirmQuit,
@@ -550,11 +570,45 @@ export class GameApp extends Component {
             pulse: this.pulse(),
             tongue: this.tongue,
             fx: this.fx,
+            hideSnake: this.save.skin === 'dragon' && !!this.dragonTexture,
             mascot: this.phase === 'menu' || !this.world,
             stars: this.stars,
         });
         this.paintOps(this.fieldDyn!, out.cmds);
+        this.drawDragon(lead);
         this.syncPopups(out.popups);
+    }
+
+    private drawDragon(lead: number): void {
+        const active = this.save.skin === 'dragon' && !!this.dragonTexture && !!this.world && this.phase !== 'menu';
+        this.dragonLayer!.active = active;
+        if (!active) return;
+        const g = this.grid;
+        const geo = snakePolylines(this.world!, lead, g.cell, g.cols, g.rows);
+        let used = 0;
+        const place = (x: number, y: number, angle: number, frame: number, w: number, h: number): void => {
+            const offsets = this.world!.mode === 'zen' ? [-1, 0, 1] : [0];
+            for (const ox of offsets) for (const oy of offsets) {
+                const px = x + ox * g.w, py = y + oy * g.h;
+                if (px < -h || py < -h || px > g.w + h || py > g.h + h) continue;
+                let node = this.dragonNodes[used++];
+                if (!node) { node = makeNode('dragon-part'); node.addComponent(UITransform); node.addComponent(Sprite); this.dragonLayer!.addChild(node); this.dragonNodes.push(node); }
+                node.active = true; node.setPosition(px, py); node.angle = angle;
+                const sprite = node.getComponent(Sprite)!; sprite.spriteFrame = this.dragonFrames[frame]; sprite.sizeMode = Sprite.SizeMode.CUSTOM;
+                node.getComponent(UITransform)!.setContentSize(w, h);
+                node.setSiblingIndex(used - 1);
+            }
+        };
+        for (const run of geo.runs) {
+            const pts = run.pts;
+            for (let i = pts.length - 1; i > 0; i--) {
+                const a = pts[i], b = pts[i - 1];
+                const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy);
+                place((a[0]+b[0])/2, (a[1]+b[1])/2, Math.atan2(dy, dx)*180/Math.PI-90, i === pts.length-1 ? 2 : 1, g.cell * .85, i === pts.length-1 ? g.cell : len + 2);
+            }
+        }
+        place(geo.head.x, geo.head.y, Math.atan2(geo.head.face[1], geo.head.face[0])*180/Math.PI-90, 0, g.cell*1.55, g.cell*1.7);
+        for (let i = used; i < this.dragonNodes.length; i++) this.dragonNodes[i].active = false;
     }
 
     private paintOps(gfx: Graphics, cmds: DrawCmd[]): void {
@@ -906,6 +960,10 @@ export class GameApp extends Component {
         if (id === 'pause') {
             this.togglePause();
             return;
+        }
+        if (id === 'skins') { this.toggleSettings('skins'); return; }
+        if (id === 'skin-classic' || id === 'skin-dragon') {
+            this.save.skin = id === 'skin-dragon' ? 'dragon' : 'classic'; this.persist(); return;
         }
         if (id === 'settings') {
             this.toggleSettings(this.settingsTab);
@@ -1291,7 +1349,11 @@ export class GameApp extends Component {
 
     private play(name: string): void {
         if (!this.tones.enabled) return;
-        if (sys.isBrowser || !this.clips.has(name)) {
+        const bridge = this.bridge();
+        if (sys.isNative && bridge?.snakeDisplay && SOUND_KEYS.includes(name as typeof SOUND_KEYS[number])) {
+            if (bridge.snakeDisplay('audio:' + name, 0, 0, 0) === 'ok') return;
+        }
+        if (sys.isBrowser) {
             this.tones.play(name);
             return;
         }
@@ -1305,6 +1367,7 @@ export class GameApp extends Component {
         for (const key of SOUND_KEYS) {
             resources.load('audio/' + key, AudioClip, (err: any, clip: any) => {
                 pending -= 1;
+                if (err) console.error('Audio load failed: ' + key, err);
                 if (!err && clip) {
                     this.clips.set(key, clip);
                     loaded += 1;

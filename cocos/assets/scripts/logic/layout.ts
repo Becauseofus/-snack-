@@ -24,10 +24,11 @@ import type { DisplayChoice } from './display';
 import { paintCard, paintDim, type DrawCmd } from './paint';
 
 export type Phase = 'menu' | 'playing' | 'paused' | 'dying' | 'over';
-export type SettingsTab = 'display' | 'sound' | 'help' | 'record';
+export type SettingsTab = 'skins' | 'display' | 'sound' | 'help' | 'record';
 
 export interface UiModel {
     phase: Phase;
+    skin?: 'classic' | 'dragon';
     settingsOpen: boolean;
     settingsTab: SettingsTab;
     confirmClear: boolean;
@@ -292,7 +293,14 @@ function settingsPanel(
     });
 
     const box: Ctx = { left, right, inner, x: left + inner, w: right - left - inner * 2, top: bodyTop, bottom: bodyBottom, rowH, y: bodyTop };
-    if (m.settingsTab === 'sound') soundTab(labels, buttons, m, box);
+    if (m.settingsTab === 'skins') {
+        sectionTitle(labels, box, '选择皮肤 · 自动保存');
+        for (const [id, name] of [['classic', '经典青蛇'], ['dragon', '金鳞祥龙']]) {
+            button(buttons, 'skin-' + id, name, box.x + 90, box.y, 180, 32, { parent: 'field', selected: (m.skin || 'classic') === id });
+            box.y -= 44;
+        }
+    }
+    else if (m.settingsTab === 'sound') soundTab(labels, buttons, m, box);
     else if (m.settingsTab === 'help') helpTab(labels, buttons, m, box);
     else if (m.settingsTab === 'record') recordTab(labels, buttons, m, box);
     else displayTab(labels, buttons, m, box);
@@ -568,6 +576,7 @@ export function layoutChrome(W: number, H: number, ui: UiModel, clock = 0): Chro
     const pausedNow = ui.phase === 'paused';
     const actions: Array<[string, string, boolean, boolean]> = [
         ['settings', '设置', true, ui.settingsOpen],
+        ['skins', '皮肤', true, ui.settingsOpen && ui.settingsTab === 'skins'],
         ['pause', PAUSE_TEXT[ui.phase] ?? '暂停', ui.phase === 'playing' || pausedNow, false],
     ];
     if (ui.phase !== 'menu') {

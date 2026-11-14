@@ -84,3 +84,8 @@ if (Test-Path $settingsPath) {
         Write-Host "Disabled the Cocos splash screen"
     }
 }
+
+# Keep PCM files accessible to the Windows default-device audio backend.
+$audioDest = Join-Path $Stage "Resources\audio"
+New-Item -ItemType Directory -Force -Path $audioDest | Out-Null
+Copy-Item -Path (Join-Path $PSScriptRoot "..\assets\resources\audio\*.wav") -Destination $audioDest -Force

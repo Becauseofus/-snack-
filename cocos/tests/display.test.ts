@@ -142,3 +142,15 @@ test('controls stay on screen at desktop, window, and phone sizes', () => {
         });
     }
 });
+
+test('skin selection persists and invalid or old saves use classic', () => {
+    assert.equal(sanitizeSave({best: 123}).skin, 'classic');
+    assert.equal(sanitizeSave({skin: 'dragon', best: 123}).skin, 'dragon');
+    assert.equal(sanitizeSave({skin: 'invalid'}).skin, 'classic');
+    assert.equal(sanitizeSave({skin: 'dragon', best: 123}).best, 123);
+});
+test('skin panel fits small and desktop windows', () => {
+    for (const [w,h] of [[360,640],[640,360],[1280,720],[1920,1080]]) {
+        assertInside(w,h,{settingsOpen:true,settingsTab:'skins',skin:'dragon'});
+    }
+});
