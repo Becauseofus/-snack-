@@ -89,11 +89,30 @@ export interface DisplaySave {
     height: number;
 }
 
+/** 帧率上限。0 表示不限制，交给引擎跑满。 */
+export type FpsLimit = 0 | 30 | 60 | 120 | 180;
+export const FPS_OPTIONS: readonly FpsLimit[] = [30, 60, 120, 180, 0];
+
+export function fpsLabel(v: FpsLimit): string {
+    return v === 0 ? '不限' : String(v);
+}
+
+/** 引擎（pacer）只接受大于 0 的目标帧率，「不限」用一个足够大的值代替。 */
+export function fpsToEngine(v: FpsLimit): number {
+    return v === 0 ? 1000 : v;
+}
+
+export function sanitizeFps(raw: unknown): FpsLimit {
+    const n = Number(raw);
+    return (FPS_OPTIONS as readonly number[]).includes(n) ? (n as FpsLimit) : 60;
+}
+
 export interface SaveData {
     best: number;
     best_by_mode: Record<Mode, number>;
     history: HistoryItem[];
     speed: number;
+    fps: FpsLimit;
     mode: Mode;
     sound: boolean;
     skin: 'classic' | 'dragon' | 'robot' | 'candy';
@@ -106,6 +125,7 @@ export function defaultSave(): SaveData {
         best_by_mode: { classic: 0, zen: 0, challenge: 0 },
         history: [],
         speed: 5,
+        fps: 60,
         mode: 'classic',
         sound: true,
         skin: 'classic',
@@ -118,6 +138,7 @@ export function sanitizeSave(raw: unknown): SaveData {
     const src = raw && typeof raw === 'object' ? (raw as Record<string, unknown>) : {};
     const speed = Number(src.speed);
     d.speed = Number.isFinite(speed) ? Math.max(1, Math.min(10, Math.trunc(speed))) : 5;
+    d.fps = sanitizeFps(src.fps);
     const best = Number(src.best);
     d.best = Number.isFinite(best) ? Math.max(0, Math.trunc(best)) : 0;
     d.mode = (MODES as readonly string[]).includes(String(src.mode)) ? (src.mode as Mode) : 'classic';

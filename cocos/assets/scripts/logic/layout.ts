@@ -7,6 +7,8 @@
 
 import {
     ACCENT,
+    FPS_OPTIONS,
+    fpsLabel,
     GOLD,
     MODE_BLURB,
     MODE_COLOR,
@@ -29,6 +31,8 @@ export type SettingsTab = 'skins' | 'display' | 'sound' | 'help' | 'record';
 export interface UiModel {
     phase: Phase;
     skin?: 'classic' | 'dragon' | 'robot' | 'candy';
+    /** 帧率上限，0 表示不限 */
+    fps?: number;
     settingsOpen: boolean;
     settingsTab: SettingsTab;
     confirmClear: boolean;
@@ -243,7 +247,7 @@ function settingsPanel(
     const compact = ph < 360;
     const titleSize = compact ? 16 : 19;
     const tabH = compact ? 26 : 30;
-    const tabY = top - (compact ? 44 : 60);
+    const tabY = top - (compact ? 46 : 64);
     const bodyTop = tabY - tabH / 2 - (compact ? 14 : 22);
     const footH = compact ? 30 : 34;
     const footY = bottom + (compact ? 20 : 30);
@@ -335,6 +339,22 @@ function displayTab(labels: LabelSpec[], buttons: ButtonSpec[], m: UiModel, c: C
         selected: m.displayMode === 'fullscreen',
     });
     c.y -= 38;
+
+    // 帧率上限：30 / 60 / 120 / 180 / 不限
+    if (c.y - 15 >= floor) {
+        label(labels, 'set-fps-title', '帧率', c.x, c.y, 12, MUTED);
+        const n = FPS_OPTIONS.length;
+        const fgap = 6;
+        const fw = Math.max(38, Math.min(58, (c.w - 46 - fgap * (n - 1)) / n));
+        for (let i = 0; i < n; i++) {
+            const v = FPS_OPTIONS[i];
+            button(buttons, 'fps-' + v, fpsLabel(v), c.x + 46 + fw / 2 + i * (fw + fgap), c.y, fw, 26, {
+                parent: 'field',
+                selected: (m.fps ?? 60) === v,
+            });
+        }
+        c.y -= 38;
+    }
 
     const choices = m.displayChoices || [];
     if (!choices.length) {

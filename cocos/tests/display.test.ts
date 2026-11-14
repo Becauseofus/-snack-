@@ -154,3 +154,19 @@ test('skin panel fits small and desktop windows', () => {
         assertInside(w,h,{settingsOpen:true,settingsTab:'skins',skin:'dragon'});
     }
 });
+
+test('frame rate options persist and show in the display tab', () => {
+    assert.equal(sanitizeSave({ fps: 120 }).fps, 120);
+    assert.equal(sanitizeSave({ fps: 0 }).fps, 0);      // 0 = 不限
+    assert.equal(sanitizeSave({ fps: 999 }).fps, 60);   // 非法值回到默认
+    assert.equal(sanitizeSave({}).fps, 60);
+    for (const [w, h] of [[1280, 720], [960, 540], [1920, 1080]]) {
+        const chrome = layoutChrome(w, h, model({ settingsOpen: true, settingsTab: 'display', fps: 180 }));
+        const ids = chrome.buttons.map((b) => b.id);
+        for (const v of [30, 60, 120, 180, 0]) {
+            assert.ok(ids.includes('fps-' + v), `${w}x${h} 缺少 fps-${v}`);
+        }
+        assert.equal(chrome.buttons.find((b) => b.id === 'fps-180')?.selected, true);
+        assert.equal(chrome.buttons.find((b) => b.id === 'fps-60')?.selected, false);
+    }
+});

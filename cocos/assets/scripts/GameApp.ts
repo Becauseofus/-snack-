@@ -34,6 +34,8 @@ import {
     BODY_A,
     CYAN,
     defaultSave,
+    fpsToEngine,
+    sanitizeFps,
     isTitleStartKey,
     enterAction,
     GOLD,
@@ -226,6 +228,7 @@ export class GameApp extends Component {
     onLoad(): void {
         this.save = this.loadSave();
         this.save.speed = GAME_SPEED; // 速度条已移除，统一固定节奏
+        this.applyFrameRate();
         this.tones.enabled = this.save.sound;
         this.soundAvailable = toneAvailable() || !!this.bridge();
         this.node.layer = Layers.Enum.UI_2D;
@@ -423,6 +426,7 @@ export class GameApp extends Component {
         return {
             phase: this.phase,
             skin: this.save.skin,
+            fps: this.save.fps,
             settingsOpen: this.settingsOpen,
             settingsTab: this.settingsTab,
             confirmClear: this.confirmClear,
@@ -463,6 +467,7 @@ export class GameApp extends Component {
             model.selectedMode,
             model.pendingMode,
             model.skin,
+            model.fps,
             model.settingsOpen,
             model.settingsTab,
             model.confirmQuit,
@@ -1058,6 +1063,12 @@ export class GameApp extends Component {
             this.toggleSound();
             return;
         }
+        if (id.indexOf('fps-') === 0) {
+            this.save.fps = sanitizeFps(Number(id.slice(4)));
+            this.applyFrameRate();
+            this.persist();
+            return;
+        }
         if (id === 'display-window' || id === 'display-full' || id.indexOf('res-') === 0) {
             this.chooseDisplay(id);
             return;
@@ -1388,6 +1399,13 @@ export class GameApp extends Component {
         if (!doc || !doc.getElementById) return;
         const el = doc.getElementById('GameCanvas');
         if (el && el.focus) el.focus();
+    }
+
+    // 帧率上限：设置里改完立即生效，同时写进存档
+    private applyFrameRate(): void {
+        const fps = sanitizeFps(this.save.fps);
+        this.save.fps = fps;
+        game.frameRate = fpsToEngine(fps);
     }
 
     private applySavedDisplay(): void {
