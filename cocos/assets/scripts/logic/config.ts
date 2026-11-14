@@ -223,3 +223,16 @@ export function stampNow(date = new Date()): string {
     const p = (n: number) => String(n).padStart(2, '0');
     return `${date.getFullYear()}-${p(date.getMonth() + 1)}-${p(date.getDate())} ${p(date.getHours())}:${p(date.getMinutes())}`;
 }
+
+/** Only ordinary keyboard keys may start a title-screen game.
+ * Native backends can report unsupported system keys as 0 or an SDL code.
+ */
+export function isTitleStartKey(key: number): boolean {
+    return [8, 9, 13, 32, 186, 187, 188, 189, 190, 191, 192, 219, 220, 221, 222].includes(key)
+        || (key >= 33 && key <= 40) || key === 45 || key === 46
+        || (key >= 48 && key <= 57) || (key >= 65 && key <= 90)
+        || (key >= 96 && key <= 111);
+}
+export function enterAction(phase: string): 'start' | 'resume' | 'none' {
+    return phase === 'menu' || phase === 'over' ? 'start' : phase === 'paused' ? 'resume' : 'none';
+}

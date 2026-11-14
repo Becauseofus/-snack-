@@ -34,6 +34,8 @@ import {
     BODY_A,
     CYAN,
     defaultSave,
+    isTitleStartKey,
+    enterAction,
     GOLD,
     HISTORY_MAX,
     intervalMs,
@@ -50,7 +52,7 @@ import {
 import { FX } from './logic/fx';
 import { displayStatus, parseNativeDisplay, pickSavedWindow, windowChoices, type DisplayChoice, type NativeDisplay } from './logic/display';
 import { layoutChrome, measure, type Chrome, type LabelSpec, type ButtonSpec, type SettingsTab, type UiModel } from './logic/layout';
-import { mascotGeometry, paintMascot, type SnakeGeometry, snakePolylines, cellCenter, makeStars, paintBackground, paintField, type DrawCmd, type Star } from './logic/paint';
+import { skinBodyTiles, skinHeadSize, skinHeadPosition, mascotGeometry, paintMascot, type SnakeGeometry, snakePolylines, cellCenter, makeStars, paintBackground, paintField, type DrawCmd, type Star } from './logic/paint';
 import { SnakeWorld, type WorldEvent } from './logic/SnakeWorld';
 import { toneAvailable, Tones } from './logic/tones';
 
@@ -239,9 +241,9 @@ export class GameApp extends Component {
 
         this.ensureNodes();
         const atlasRects: Record<string, number[][]> = {
-            dragon: [[100,15,540,590],[830,160,210,70],[830,650,210,580]],
-            robot: [[170,90,370,445],[820,230,215,145],[820,650,220,510]],
-            candy: [[170,20,380,600],[780,180,235,150],[780,690,240,515]],
+            dragon: [[100,15,540,590],[830,160,210,70],[830,670,210,560]],
+            robot: [[170,90,370,445],[820,230,215,145],[820,670,220,490]],
+            candy: [[170,20,380,600],[780,180,235,150],[780,710,240,495]],
         };
         for (const [skin, rects] of Object.entries(atlasRects)) {
             resources.load('skins/' + skin + '/texture', Texture2D, (err, texture) => {
@@ -250,6 +252,14 @@ export class GameApp extends Component {
                     const frame = new SpriteFrame(); frame.texture = texture;
                     frame.rect = new Rect(...r as [number,number,number,number]); return frame;
                 });
+                // Slice the tail once at load time, so its texture can follow the same
+                // curved centreline as the body without recreating frames each tick.
+                const tail = frames[2].rect;
+                for (let i = 0; i < 24; i++) {
+                    const strip = new SpriteFrame(); strip.texture = texture;
+                    strip.rect = new Rect(tail.x, tail.y + tail.height * i / 24, tail.width, tail.height / 24);
+                    frames.push(strip);
+                }
                 this.skinFrames.set(skin, frames);
             });
         }
@@ -621,15 +631,15 @@ export class GameApp extends Component {
 
     private renderDragon(layer: Node, nodes: Node[], geo: SnakeGeometry, g: {w: number; h: number; cell: number}, wrap: boolean): void {
         let used = 0;
-        const place = (x: number, y: number, angle: number, frame: number, w: number, h: number): void => {
+        const place = (x: number, y: number, angle: number, frame: number, w: number, h: number, wrapX = true, wrapY = true, opacity = 255): void => {
             const offsets = wrap ? [-1, 0, 1] : [0];
-            for (const ox of offsets) for (const oy of offsets) {
+            for (const ox of (wrapX ? offsets : [0])) for (const oy of (wrapY ? offsets : [0])) {
                 const px = x + ox * g.w, py = y + oy * g.h;
                 if (px < -h || py < -h || px > g.w + h || py > g.h + h) continue;
                 let node = nodes[used++];
                 if (!node) { node = makeNode('dragon-part'); node.addComponent(UITransform); node.addComponent(Sprite); layer.addChild(node); nodes.push(node); }
                 node.active = true; node.setPosition(px, py); node.angle = angle;
-                const sprite = node.getComponent(Sprite)!; sprite.spriteFrame = this.skinFrames.get(this.save.skin)![frame]; sprite.sizeMode = Sprite.SizeMode.CUSTOM;
+                const sprite = node.getComponent(Sprite)!; sprite.spriteFrame = this.skinFrames.get(this.save.skin)![frame]; sprite.sizeMode = Sprite.SizeMode.CUSTOM; sprite.color = new Color(255, 255, 255, opacity);
                 node.getComponent(UITransform)!.setContentSize(w, h);
                 node.setSiblingIndex(used - 1);
                 // Animate only the head display; the metal body stays unchanged.
@@ -649,15 +659,30 @@ export class GameApp extends Component {
                 } else if (display) display.active = false;
             }
         };
+        const frames = this.skinFrames.get(this.save.skin)!;
+        const bodyWidth = g.cell * .85;
+        const bodyLength = bodyWidth * frames[1].rect.height / frames[1].rect.width;
         for (const run of geo.runs) {
-            const pts = run.pts;
-            for (let i = pts.length - 1; i > 0; i--) {
-                const a = pts[i], b = pts[i - 1];
-                const dx = b[0] - a[0], dy = b[1] - a[1], len = Math.hypot(dx, dy);
-                place((a[0]+b[0])/2, (a[1]+b[1])/2, Math.atan2(dy, dx)*180/Math.PI-90, i === pts.length-1 ? 2 : 1, g.cell * .85, i === pts.length-1 ? g.cell : len + 2);
+            // Reserve the entire tail footprint: never draw rectangular body tiles under it.
+            const tailLength = Math.min(bodyWidth * frames[2].rect.height / frames[2].rect.width, run.total * 0.45);
+            const blendLength = Math.min(g.cell * 0.45, tailLength * 0.25);
+            const tiles = skinBodyTiles(run.pts, bodyLength, tailLength - blendLength);
+            for (let i = tiles.length - 1; i >= 0; i--) {
+                const t = tiles[i];
+                place(t.x, t.y, t.angle, 1, bodyWidth, t.chord + 0.6);
+            }
+            const tailTiles = skinBodyTiles(run.pts, tailLength / 24, 0, Math.max(0, run.total - tailLength));
+            for (let i = Math.min(23, tailTiles.length - 1); i >= 0; i--) {
+                const t = tailTiles[i];
+                const progress = Math.min(1, ((i + 0.5) * tailLength / 24) / blendLength);
+                const alpha = Math.round(255 * progress * progress * (3 - 2 * progress));
+                place(t.x, t.y, t.angle, 3 + i, bodyWidth, t.chord + 0.8, true, true, alpha);
             }
         }
-        place(geo.head.x, geo.head.y, Math.atan2(geo.head.face[1], geo.head.face[0])*180/Math.PI-90, 0, g.cell*1.55, g.cell*1.7);
+        const headSize = skinHeadSize(g.cell);
+        const horizontal = Math.abs(geo.head.face[0]) >= Math.abs(geo.head.face[1]);
+        const headPos = wrap ? skinHeadPosition(geo.head.x, geo.head.y, geo.head.face, g.cell, g.w, g.h) : [geo.head.x, geo.head.y];
+        place(headPos[0], headPos[1], Math.atan2(geo.head.face[1], geo.head.face[0])*180/Math.PI-90, 0, headSize.w, headSize.h, horizontal, !horizontal);
         for (let i = used; i < nodes.length; i++) nodes[i].active = false;
     }
 
@@ -1065,7 +1090,7 @@ export class GameApp extends Component {
         }
         // 标题界面：除 Esc / 修饰键外任意键直接开始
         if (this.phase === 'menu') {
-            if (NO_START[k] || (k >= KeyCode.F1 && k <= KeyCode.F12) || k === 91 || k === 92 || k === 93) return;
+            if (NO_START[k] || (!isTitleStartKey(k) && !(typeof KeyCode.NUM_ENTER === 'number' && k === KeyCode.NUM_ENTER))) return;
             this.startGame();
             return;
         }
@@ -1082,8 +1107,9 @@ export class GameApp extends Component {
             return;
         }
         if (k === KeyCode.ENTER || k === KeyCode.NUM_ENTER) {
-            if (this.phase === 'paused') this.phase = 'playing';
-            else this.startGame();
+            const action = enterAction(this.phase);
+            if (action === 'resume') this.phase = 'playing';
+            else if (action === 'start') this.startGame();
             return;
         }
         if (k === KeyCode.SPACE || k === KeyCode.KEY_P) {

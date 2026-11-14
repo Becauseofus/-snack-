@@ -737,3 +737,32 @@ export function paintDim(w: number, h: number): DrawCmd {
 export function paintCard(cx: number, cy: number, cw: number, ch: number, accent: string): DrawCmd[] {
     return [poly(roundRectPts(cx - cw / 2, cy - ch / 2, cw, ch, 18), PANEL, accent, 2)];
 }
+/** Preserve the original artwork size. */
+export function skinHeadSize(cell: number): {w: number; h: number} {
+    return {w: cell * 1.55, h: cell * 1.7};
+}
+
+/** Keep head and body on the same centreline; the field mask clips overhang. */
+export function skinHeadPosition(x: number, y: number, _face: Pt, _cell: number, _width: number, _height: number): Pt {
+    return [x, y];
+}
+
+/** Tile by physical length, independent of how many curve samples were generated. */
+export function skinBodyTiles(points: ReadonlyArray<ReadonlyArray<number>>, tileLength: number, tailLength = 0, startDistance = 0): Array<{x:number;y:number;angle:number;length:number;chord:number}> {
+    if (points.length < 2 || tileLength <= 0) return [];
+    const distances = [0];
+    for (let i=1;i<points.length;i++) distances.push(distances[i-1]+Math.hypot(points[i][0]-points[i-1][0],points[i][1]-points[i-1][1]));
+    const total=distances[distances.length-1];
+    const at=(d:number): Pt => {
+        let i=1; while(i<distances.length-1 && distances[i]<d) i++;
+        const t=(d-distances[i-1])/Math.max(0.001,distances[i]-distances[i-1]);
+        return [points[i-1][0]+(points[i][0]-points[i-1][0])*t,points[i-1][1]+(points[i][1]-points[i-1][1])*t];
+    };
+    const out=[];
+    const bodyEnd = Math.max(0, total - tailLength);
+    for(let start=startDistance;start<bodyEnd-0.000001;start+=tileLength) {
+        const end=Math.min(bodyEnd,start+tileLength),a=at(start),b=at(end),mid=at((start+end)/2);
+        out.push({x:(a[0]+b[0])/2,y:(a[1]+b[1])/2,chord:Math.hypot(a[0]-b[0],a[1]-b[1]),angle:Math.atan2(a[1]-b[1],a[0]-b[0])*180/Math.PI-90,length:end-start});
+    }
+    return out;
+}
