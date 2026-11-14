@@ -96,7 +96,7 @@ export interface SaveData {
     speed: number;
     mode: Mode;
     sound: boolean;
-    skin: 'classic' | 'dragon';
+    skin: 'classic' | 'dragon' | 'robot' | 'candy';
     display: DisplaySave;
 }
 
@@ -122,7 +122,7 @@ export function sanitizeSave(raw: unknown): SaveData {
     d.best = Number.isFinite(best) ? Math.max(0, Math.trunc(best)) : 0;
     d.mode = (MODES as readonly string[]).includes(String(src.mode)) ? (src.mode as Mode) : 'classic';
     d.sound = src.sound === undefined ? true : Boolean(src.sound);
-    d.skin = src.skin === 'dragon' ? 'dragon' : 'classic';
+    d.skin = src.skin === 'dragon' || src.skin === 'robot' || src.skin === 'candy' ? src.skin : 'classic';
     const display = src.display;
     if (display && typeof display === 'object') {
         const row = display as Record<string, unknown>;

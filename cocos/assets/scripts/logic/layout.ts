@@ -28,7 +28,7 @@ export type SettingsTab = 'skins' | 'display' | 'sound' | 'help' | 'record';
 
 export interface UiModel {
     phase: Phase;
-    skin?: 'classic' | 'dragon';
+    skin?: 'classic' | 'dragon' | 'robot' | 'candy';
     settingsOpen: boolean;
     settingsTab: SettingsTab;
     confirmClear: boolean;
@@ -295,9 +295,12 @@ function settingsPanel(
     const box: Ctx = { left, right, inner, x: left + inner, w: right - left - inner * 2, top: bodyTop, bottom: bodyBottom, rowH, y: bodyTop };
     if (m.settingsTab === 'skins') {
         sectionTitle(labels, box, '选择皮肤 · 自动保存');
-        for (const [id, name] of [['classic', '经典青蛇'], ['dragon', '金鳞祥龙']]) {
-            button(buttons, 'skin-' + id, name, box.x + 90, box.y, 180, 32, { parent: 'field', selected: (m.skin || 'classic') === id });
-            box.y -= 44;
+        const skinW = Math.min(180, box.w * 0.45);
+        label(labels, 'skin-preview-title', '皮肤预览', box.x + skinW + 16, box.y + 8, 12, MUTED, {w: box.w - skinW - 16});
+        const skinGap = Math.min(44, (box.y - box.bottom + 12) / 4);
+        for (const [id, name] of [['classic', '经典青蛇'], ['dragon', '金鳞祥龙'], ['robot', '霓光机械蛇'], ['candy', '草莓糖果蛇']]) {
+            button(buttons, 'skin-' + id, name, box.x + skinW / 2, box.y, skinW, Math.min(32, skinGap - 5), { parent: 'field', selected: (m.skin || 'classic') === id });
+            box.y -= skinGap;
         }
     }
     else if (m.settingsTab === 'sound') soundTab(labels, buttons, m, box);

@@ -632,7 +632,7 @@ function paintFood(cmds: DrawCmd[], x: number, y: number, kind: FoodKind, cell: 
  * 菜单里的装饰蛇
  * ------------------------------------------------------------------ */
 
-function paintMascot(cmds: DrawCmd[], w: number, h: number, cell: number, clock: number, tongue: number): void {
+export function mascotGeometry(w: number, h: number, cell: number, clock: number): SnakeGeometry {
     const n = 22;
     const path: Pt[] = [];
     for (let i = 0; i < n; i++) {
@@ -645,8 +645,14 @@ function paintMascot(cmds: DrawCmd[], w: number, h: number, cell: number, clock:
     const face: Pt = [1 / len, -slope / len];
     const size = Math.max(16, Math.min(cell, 34));
     const run = prepareRun(roundPath(path, 0.45 * size), size, 1);
-    if (run) emitRun(cmds, run, 0, 0, w, h);
-    emitHead(cmds, { x: path[0][0], y: path[0][1], face }, size, 1, false, tongue, 0, 0, w, h);
+    return { runs: run ? [run] : [], head: {x: path[0][0], y: path[0][1], face}, box: {minX: 0, minY: 0, maxX: w, maxY: h} };
+}
+
+export function paintMascot(cmds: DrawCmd[], w: number, h: number, cell: number, clock: number, tongue: number): void {
+    const size = Math.max(16, Math.min(cell, 34));
+    const geo = mascotGeometry(w, h, cell, clock);
+    for (const run of geo.runs) emitRun(cmds, run, 0, 0, w, h);
+    emitHead(cmds, geo.head, size, 1, false, tongue, 0, 0, w, h);
 
     const fx = 0.42 * w + 10 * Math.sin(1.2 * clock);
     const fy = h - (0.62 * h + 8 * Math.sin(1.8 * clock));
@@ -684,7 +690,7 @@ export function paintField(input: PaintInput): FieldFrame {
     if (input.stars && input.stars.length) starsInto(cmds, input.stars, clock);
 
     if (mascot || !world) {
-        paintMascot(cmds, w, h, cell, clock, input.tongue);
+        if (!input.hideSnake) paintMascot(cmds, w, h, cell, clock, input.tongue);
         return { cmds, popups };
     }
 

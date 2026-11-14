@@ -50,7 +50,7 @@ import {
 import { FX } from './logic/fx';
 import { displayStatus, parseNativeDisplay, pickSavedWindow, windowChoices, type DisplayChoice, type NativeDisplay } from './logic/display';
 import { layoutChrome, measure, type Chrome, type LabelSpec, type ButtonSpec, type SettingsTab, type UiModel } from './logic/layout';
-import { snakePolylines, cellCenter, makeStars, paintBackground, paintField, type DrawCmd, type Star } from './logic/paint';
+import { mascotGeometry, paintMascot, type SnakeGeometry, snakePolylines, cellCenter, makeStars, paintBackground, paintField, type DrawCmd, type Star } from './logic/paint';
 import { SnakeWorld, type WorldEvent } from './logic/SnakeWorld';
 import { toneAvailable, Tones } from './logic/tones';
 
@@ -156,8 +156,10 @@ export class GameApp extends Component {
     private world: SnakeWorld | null = null;
     private fx = new FX();
     private tones = new Tones();
-    private dragonTexture: Texture2D | null = null;
-    private dragonFrames: SpriteFrame[] = [];
+    private previewLayer: Node | null = null;
+    private previewGraphics: Graphics | null = null;
+    private previewNodes: Node[] = [];
+    private skinFrames = new Map<string, SpriteFrame[]>();
     private dragonNodes: Node[] = [];
     private dragonLayer: Node | null = null;
     private clips = new Map<string, AudioClip>();
@@ -236,14 +238,21 @@ export class GameApp extends Component {
         if (sys.isNative) this.loadClips();
 
         this.ensureNodes();
-        resources.load('skins/dragon/texture', Texture2D, (err, texture) => {
-            if (err) { console.error('Dragon skin load failed', err); return; }
-            this.dragonTexture = texture;
-            for (const r of [[100, 15, 540, 590], [830, 160, 210, 70], [830, 650, 210, 580]]) {
-                const frame = new SpriteFrame(); frame.texture = texture; frame.rect = new Rect(...r as [number, number, number, number]);
-                this.dragonFrames.push(frame);
-            }
-        });
+        const atlasRects: Record<string, number[][]> = {
+            dragon: [[100,15,540,590],[830,160,210,70],[830,650,210,580]],
+            robot: [[170,90,370,445],[820,230,215,145],[820,650,220,510]],
+            candy: [[170,20,380,600],[780,180,235,150],[780,690,240,515]],
+        };
+        for (const [skin, rects] of Object.entries(atlasRects)) {
+            resources.load('skins/' + skin + '/texture', Texture2D, (err, texture) => {
+                if (err) { console.error('Skin load failed: ' + skin, err); return; }
+                const frames = rects.map(r => {
+                    const frame = new SpriteFrame(); frame.texture = texture;
+                    frame.rect = new Rect(...r as [number,number,number,number]); return frame;
+                });
+                this.skinFrames.set(skin, frames);
+            });
+        }
         input.on(Input.EventType.KEY_DOWN, this.onKey, this);
         view.on('canvas-resize', this.onResize, this);
         game.on(Game.EVENT_HIDE, this.onHide, this);
@@ -330,6 +339,9 @@ export class GameApp extends Component {
         const cardNode = makeNode('field-cards');
         this.fieldNode.addChild(cardNode);
         this.fieldCards = cardNode.addComponent(Graphics);
+        this.previewLayer = makeNode('skin-preview');
+        this.fieldNode.addChild(this.previewLayer);
+        this.previewGraphics = this.previewLayer.addComponent(Graphics);
 
         this.fieldBlock = makeNode('field-block');
         this.fieldNode.addChild(this.fieldBlock);
@@ -570,33 +582,71 @@ export class GameApp extends Component {
             pulse: this.pulse(),
             tongue: this.tongue,
             fx: this.fx,
-            hideSnake: this.save.skin === 'dragon' && !!this.dragonTexture,
+            hideSnake: this.skinFrames.has(this.save.skin),
             mascot: this.phase === 'menu' || !this.world,
             stars: this.stars,
         });
         this.paintOps(this.fieldDyn!, out.cmds);
         this.drawDragon(lead);
+        this.drawSkinPreview(lay);
         this.syncPopups(out.popups);
     }
 
     private drawDragon(lead: number): void {
-        const active = this.save.skin === 'dragon' && !!this.dragonTexture && !!this.world && this.phase !== 'menu';
+        const active = this.skinFrames.has(this.save.skin);
         this.dragonLayer!.active = active;
         if (!active) return;
         const g = this.grid;
-        const geo = snakePolylines(this.world!, lead, g.cell, g.cols, g.rows);
+        const menu = this.phase === 'menu' || !this.world;
+        const geo = menu ? mascotGeometry(g.w, g.h, g.cell, this.clock) : snakePolylines(this.world!, lead, g.cell, g.cols, g.rows);
+        this.renderDragon(this.dragonLayer!, this.dragonNodes, geo, {...g, cell: menu ? Math.max(16, Math.min(g.cell, 34)) : g.cell}, !menu && this.world!.mode === 'zen');
+    }
+
+    private drawSkinPreview(lay: Chrome): void {
+        const marker = lay.labels.find(l => l.id === 'skin-preview-title');
+        this.previewLayer!.active = !!marker;
+        if (!marker) return;
+        const w = marker.w, h = 90, cell = Math.max(12, Math.min(26, w / 6));
+        this.previewLayer!.setPosition(marker.x, marker.y - 80);
+        this.previewGraphics!.clear();
+        for (const node of this.previewNodes) node.active = false;
+        if (this.skinFrames.has(this.save.skin)) {
+            this.renderDragon(this.previewLayer!, this.previewNodes, mascotGeometry(w, h, cell, this.clock), {w, h, cell}, false);
+        } else if (this.save.skin === 'classic') {
+            const cmds: DrawCmd[] = [];
+            paintMascot(cmds, w, h, cell, this.clock, this.tongue);
+            this.paintOps(this.previewGraphics!, cmds);
+        }
+    }
+
+    private renderDragon(layer: Node, nodes: Node[], geo: SnakeGeometry, g: {w: number; h: number; cell: number}, wrap: boolean): void {
         let used = 0;
         const place = (x: number, y: number, angle: number, frame: number, w: number, h: number): void => {
-            const offsets = this.world!.mode === 'zen' ? [-1, 0, 1] : [0];
+            const offsets = wrap ? [-1, 0, 1] : [0];
             for (const ox of offsets) for (const oy of offsets) {
                 const px = x + ox * g.w, py = y + oy * g.h;
                 if (px < -h || py < -h || px > g.w + h || py > g.h + h) continue;
-                let node = this.dragonNodes[used++];
-                if (!node) { node = makeNode('dragon-part'); node.addComponent(UITransform); node.addComponent(Sprite); this.dragonLayer!.addChild(node); this.dragonNodes.push(node); }
+                let node = nodes[used++];
+                if (!node) { node = makeNode('dragon-part'); node.addComponent(UITransform); node.addComponent(Sprite); layer.addChild(node); nodes.push(node); }
                 node.active = true; node.setPosition(px, py); node.angle = angle;
-                const sprite = node.getComponent(Sprite)!; sprite.spriteFrame = this.dragonFrames[frame]; sprite.sizeMode = Sprite.SizeMode.CUSTOM;
+                const sprite = node.getComponent(Sprite)!; sprite.spriteFrame = this.skinFrames.get(this.save.skin)![frame]; sprite.sizeMode = Sprite.SizeMode.CUSTOM;
                 node.getComponent(UITransform)!.setContentSize(w, h);
                 node.setSiblingIndex(used - 1);
+                // Animate only the head display; the metal body stays unchanged.
+                let display = node.getChildByName('robot-display');
+                if (frame === 0 && this.save.skin === 'robot') {
+                    if (!display) { display = makeNode('robot-display'); display.addComponent(Graphics); node.addChild(display); }
+                    display.active = true;
+                    const gfx = display.getComponent(Graphics)!; gfx.clear();
+                    const alpha = Math.round(20 + 65 * (0.5 + 0.5 * Math.sin(this.clock * Math.PI * 2)));
+                    gfx.fillColor = new Color(25, 240, 255, alpha);
+                    gfx.ellipse(0, h * 0.14, w * 0.26, h * 0.14); gfx.fill();
+                    // A short dark sweep makes the screen visibly blink every three seconds.
+                    if (this.clock % 3 < 0.16) {
+                        gfx.fillColor = new Color(8, 18, 30, 235);
+                        gfx.ellipse(0, h * 0.14, w * 0.26, h * 0.14); gfx.fill();
+                    }
+                } else if (display) display.active = false;
             }
         };
         for (const run of geo.runs) {
@@ -608,7 +658,7 @@ export class GameApp extends Component {
             }
         }
         place(geo.head.x, geo.head.y, Math.atan2(geo.head.face[1], geo.head.face[0])*180/Math.PI-90, 0, g.cell*1.55, g.cell*1.7);
-        for (let i = used; i < this.dragonNodes.length; i++) this.dragonNodes[i].active = false;
+        for (let i = used; i < nodes.length; i++) nodes[i].active = false;
     }
 
     private paintOps(gfx: Graphics, cmds: DrawCmd[]): void {
@@ -962,8 +1012,8 @@ export class GameApp extends Component {
             return;
         }
         if (id === 'skins') { this.toggleSettings('skins'); return; }
-        if (id === 'skin-classic' || id === 'skin-dragon') {
-            this.save.skin = id === 'skin-dragon' ? 'dragon' : 'classic'; this.persist(); return;
+        if (['skin-classic', 'skin-dragon', 'skin-robot', 'skin-candy'].includes(id)) {
+            this.save.skin = id.slice(5) as SaveData['skin']; this.persist(); return;
         }
         if (id === 'settings') {
             this.toggleSettings(this.settingsTab);
@@ -1015,7 +1065,7 @@ export class GameApp extends Component {
         }
         // 标题界面：除 Esc / 修饰键外任意键直接开始
         if (this.phase === 'menu') {
-            if (NO_START[k]) return;
+            if (NO_START[k] || (k >= KeyCode.F1 && k <= KeyCode.F12) || k === 91 || k === 92 || k === 93) return;
             this.startGame();
             return;
         }
