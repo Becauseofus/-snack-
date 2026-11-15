@@ -676,8 +676,20 @@ export interface PaintInput {
     fx: FX;
     mascot: boolean;
     hideSnake?: boolean;
+    hideSkills?: boolean;
     /** 每帧闪烁的星点（由 makeStars 生成，静态层里不重复算） */
     stars?: Star[];
+}
+
+export function paintSpits(spits: readonly {x:number;y:number}[], cell: number, rows: number): DrawCmd[] {
+    const cmds: DrawCmd[] = [];
+    for (const spit of spits) {
+        const [x,y] = cellCenter(spit.x, spit.y, cell, rows);
+        const r = cell * 0.3;
+        cmds.push(circle(x,y,r,'#f5e89c','#c8b96b',1));
+        cmds.push(circle(x-r*0.3,y+r*0.3,r*0.26,'#fff9cf'));
+    }
+    return cmds;
 }
 
 export function paintField(input: PaintInput): FieldFrame {
@@ -694,6 +706,7 @@ export function paintField(input: PaintInput): FieldFrame {
         return { cmds, popups };
     }
 
+    if (!input.hideSkills) cmds.push(...paintSpits(world.spits, cell, rows));
     if (world.berry) {
         const p = cellCenter(world.berry[0], world.berry[1], cell, rows);
         paintFood(cmds, p[0], p[1], 'berry', cell, clock, false);

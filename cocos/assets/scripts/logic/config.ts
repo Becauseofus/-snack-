@@ -119,6 +119,10 @@ export interface SaveData {
     display: DisplaySave;
 }
 
+export const SKIN_SKILLS: Partial<Record<SaveData['skin'], { name: string; cooldown: number }>> = {
+    dufaxing: { name: '吐痰', cooldown: 20 },
+};
+
 export function defaultSave(): SaveData {
     return {
         best: 0,

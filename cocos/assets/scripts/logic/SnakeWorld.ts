@@ -1,6 +1,6 @@
 /** 格子规则。画面插值不在这里做。与 Python 版 SnakeWorld 对齐。 */
 
-import { FOOD_SCORE, type FoodKind, type Mode, MODES } from './config';
+import { FOOD_SCORE, type FoodKind, type Mode, MODES, SKIN_SKILLS, type SaveData } from './config';
 
 export type Cell = [number, number];
 export type Dir = [number, number];
@@ -12,7 +12,7 @@ export interface Rng {
 }
 
 export interface WorldEvent {
-    type: 'eat' | 'die' | 'win';
+    type: 'eat' | 'die' | 'win' | 'skill-eat';
     x?: number;
     y?: number;
     kind?: FoodKind;
@@ -34,6 +34,10 @@ export interface SpecialFood {
     y: number;
     kind: FoodKind;
     ttl: number;
+}
+
+export interface Spit {
+    x: number; y: number; vx: number; vy: number; armed: boolean;
 }
 
 const DIRS: Dir[] = [[0, 1], [0, -1], [1, 0], [-1, 0]];
@@ -86,6 +90,8 @@ export class SnakeWorld {
     special: SpecialFood | null = null;
     deathFace: Dir = [1, 0];
     deathGrow = false;
+    skillCooldowns: Partial<Record<SaveData['skin'], number>> = {};
+    spits: Spit[] = [];
 
     constructor(cols: number, rows: number, mode: Mode = 'classic', rng?: Rng, allowSpecial = true) {
         this.cols = cols;
@@ -117,6 +123,8 @@ export class SnakeWorld {
         this.special = null;
         this.deathFace = [1, 0];
         this.deathGrow = false;
+        this.skillCooldowns = {};
+        this.spits = [];
         this.spawnBerry();
         this.maybeSpecial();
     }
@@ -138,6 +146,61 @@ export class SnakeWorld {
         }
         this.queue.push(next);
         return true;
+    }
+
+    castSkill(skin: SaveData['skin'], mouth?: Cell): boolean {
+        const skill = SKIN_SKILLS[skin];
+        if (!skill || !this.alive || this.won || (this.skillCooldowns[skin] ?? 0) > 0) return false;
+        if (skin !== 'dufaxing') return false;
+        const [mx, my] = mouth ?? this.snake[0];
+        const x = Math.max(-0.2, Math.min(this.cols - 0.8, mx));
+        const y = Math.max(-0.2, Math.min(this.rows - 0.8, my));
+        const angle = this.rng.random() * Math.PI * 2;
+        this.spits.push({x, y, vx: Math.cos(angle) * 0.85, vy: Math.sin(angle) * 0.85, armed: false});
+        this.skillCooldowns[skin] = skill.cooldown;
+        return true;
+    }
+
+    private collectSpits(from: Cell, to: Cell): WorldEvent[] {
+        const events: WorldEvent[] = [];
+        // A zen wrap crosses two edges, never the whole middle of the board.
+        const wrapped = Math.abs(to[0]-from[0]) > 1 || Math.abs(to[1]-from[1]) > 1;
+        const dx = wrapped ? 0 : to[0]-from[0], dy = wrapped ? 0 : to[1]-from[1];
+        this.spits = this.spits.filter(p => {
+            if (!p.armed) {
+                p.armed = Math.hypot(p.x-to[0],p.y-to[1]) > 0.85;
+                return true;
+            }
+            const t = dx*dx+dy*dy ? Math.max(0,Math.min(1,((p.x-from[0])*dx+(p.y-from[1])*dy)/(dx*dx+dy*dy))) : 0;
+            const x = wrapped ? to[0] : from[0]+t*dx, y = wrapped ? to[1] : from[1]+t*dy;
+            if (Math.hypot(p.x-x,p.y-y) > 0.55) return true;
+            this.score += 40; // Fixed skill reward: no multiplier, growth, or speed change.
+            events.push({type:'skill-eat',x:p.x,y:p.y,amount:40});
+            return false;
+        });
+        return events;
+    }
+
+    tickSkills(dt: number): WorldEvent[] {
+        if (!this.alive || this.won || !Number.isFinite(dt) || dt <= 0) return [];
+        for (const skin of Object.keys(this.skillCooldowns) as SaveData['skin'][]) {
+            this.skillCooldowns[skin] = Math.max(0, this.skillCooldowns[skin]! - dt);
+        }
+        const events: WorldEvent[] = [];
+        // Small substeps prevent a moving ball from passing through the head.
+        const count = Math.ceil(dt / 0.05), step = dt / count;
+        for (let i=0;i<count;i++) {
+            for (const p of this.spits) {
+                p.x += p.vx*step; p.y += p.vy*step;
+                const xmax=this.cols-0.8, ymax=this.rows-0.8;
+                if(p.x < -0.2) {p.x=-0.4-p.x;p.vx=Math.abs(p.vx);}
+                if(p.x > xmax) {p.x=2*xmax-p.x;p.vx=-Math.abs(p.vx);}
+                if(p.y < -0.2) {p.y=-0.4-p.y;p.vy=Math.abs(p.vy);}
+                if(p.y > ymax) {p.y=2*ymax-p.y;p.vy=-Math.abs(p.vy);}
+            }
+            events.push(...this.collectSpits(this.snake[0],this.snake[0]));
+        }
+        return events;
     }
 
     glance(): Dir {
@@ -184,8 +247,8 @@ export class SnakeWorld {
             return [{ type: 'die', x: m.nx, y: m.ny }];
         }
         const kind = this.kindAt(m.nx, m.ny);
+        const events = this.collectSpits(this.snake[0], [m.nx, m.ny]);
         this.snake.unshift([m.nx, m.ny]);
-        const events: WorldEvent[] = [];
         if (kind) {
             this.award(kind, events, m.nx, m.ny);
             if (kind === 'star') {

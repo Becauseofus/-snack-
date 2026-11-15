@@ -34,6 +34,7 @@ import {
     BODY_A,
     CYAN,
     defaultSave,
+    SKIN_SKILLS,
     fpsToEngine,
     sanitizeFps,
     isTitleStartKey,
@@ -54,7 +55,7 @@ import {
 import { FX } from './logic/fx';
 import { displayStatus, parseNativeDisplay, pickSavedWindow, windowChoices, type DisplayChoice, type NativeDisplay } from './logic/display';
 import { layoutChrome, measure, type Chrome, type LabelSpec, type ButtonSpec, type SettingsTab, type UiModel } from './logic/layout';
-import { skinBodyTiles, skinHeadSize, skinHeadPosition, mascotGeometry, paintMascot, type SnakeGeometry, snakePolylines, cellCenter, makeStars, paintBackground, paintField, type DrawCmd, type Star } from './logic/paint';
+import { skinBodyTiles, skinHeadSize, skinHeadPosition, mascotGeometry, paintMascot, paintSpits, type SnakeGeometry, snakePolylines, cellCenter, makeStars, paintBackground, paintField, type DrawCmd, type Star } from './logic/paint';
 import { SnakeWorld, type WorldEvent } from './logic/SnakeWorld';
 import { toneAvailable, Tones } from './logic/tones';
 
@@ -194,6 +195,7 @@ export class GameApp extends Component {
     private fieldNode: Node | null = null;
     private fieldBg: Graphics | null = null;
     private fieldDyn: Graphics | null = null;
+    private skillGraphics: Graphics | null = null;
     private fieldCards: Graphics | null = null;
     private fieldBlock: Node | null = null;
     private fieldLabels: Node | null = null;
@@ -318,7 +320,10 @@ export class GameApp extends Component {
                 guard += 1;
                 if (this.phase !== 'playing') break;
             }
-            if (this.phase === 'playing') world.tickTime(d);
+            if (this.phase === 'playing') {
+                world.tickTime(d);
+                this.onEvents(world.tickSkills(d));
+            }
         } else if (this.phase === 'dying') {
             this.dieLeft -= d;
             this.acc = 0;
@@ -361,6 +366,9 @@ export class GameApp extends Component {
 
         this.dragonLayer = makeNode('dragon');
         this.fieldNode.addChild(this.dragonLayer);
+        const skillNode = makeNode('skill-projectiles');
+        this.fieldNode.addChild(skillNode);
+        this.skillGraphics = skillNode.addComponent(Graphics);
         const cardNode = makeNode('field-cards');
         this.fieldNode.addChild(cardNode);
         this.fieldCards = cardNode.addComponent(Graphics);
@@ -424,6 +432,11 @@ export class GameApp extends Component {
         const live = !!world && (this.phase === 'playing' || this.phase === 'paused' || this.phase === 'dying' || this.phase === 'over');
         const activeMode: Mode = live && world ? world.mode : this.save.mode;
         const buff: string[] = [];
+        const skill = SKIN_SKILLS[this.save.skin];
+        if (world && skill) {
+            const left = Math.ceil(world.skillCooldowns[this.save.skin] ?? 0);
+            buff.push(skill.name + (left > 0 ? ' ' + left + 's' : ' · 空格释放'));
+        }
         if (world && (this.phase === 'playing' || this.phase === 'paused' || this.phase === 'dying')) {
             if (world.slowLeft > 0) buff.push('慢动作 ' + world.slowLeft.toFixed(1) + 's');
             if (world.mult > 1) buff.push('双倍 ×' + world.multLeft);
@@ -479,6 +492,7 @@ export class GameApp extends Component {
             model.selectedMode,
             model.pendingMode,
             model.skin,
+            model.buff,
             model.fps,
             model.settingsOpen,
             model.settingsTab,
@@ -610,11 +624,13 @@ export class GameApp extends Component {
             tongue: this.tongue,
             fx: this.fx,
             hideSnake: this.skinFrames.has(this.save.skin),
+            hideSkills: true,
             mascot: this.phase === 'menu' || !this.world,
             stars: this.stars,
         });
         this.paintOps(this.fieldDyn!, out.cmds);
         this.drawDragon(lead);
+        this.paintOps(this.skillGraphics!, paintSpits(this.phase === 'menu' ? [] : this.world?.spits ?? [], f.cell, f.rows));
         this.drawSkinPreview(lay);
         this.syncPopups(out.popups);
     }
@@ -654,9 +670,11 @@ export class GameApp extends Component {
                 const px = x + ox * g.w, py = y + oy * g.h;
                 if (px < -h || py < -h || px > g.w + h || py > g.h + h) continue;
                 let node = nodes[used++];
-                if (!node) { node = makeNode('dragon-part'); node.addComponent(UITransform); node.addComponent(Sprite); layer.addChild(node); nodes.push(node); }
-                node.active = true; node.setPosition(px, py); node.angle = angle;
-                const sprite = node.getComponent(Sprite)!; sprite.spriteFrame = this.skinFrames.get(this.save.skin)![frame]; sprite.sizeMode = Sprite.SizeMode.CUSTOM; sprite.color = new Color(255, 255, 255, opacity);
+                if (!node) { node = makeNode('dragon-part'); node.active = false; node.addComponent(UITransform); node.addComponent(Sprite); layer.addChild(node); nodes.push(node); }
+                node.setPosition(px, py); node.angle = angle;
+                // SpriteFrame assignment auto-sizes RAW/TRIMMED sprites. Select CUSTOM
+                // before assigning any frame, especially on newly allocated head bands.
+                const sprite = node.getComponent(Sprite)!; sprite.sizeMode = Sprite.SizeMode.CUSTOM; sprite.spriteFrame = this.skinFrames.get(this.save.skin)![frame]; sprite.color = new Color(255, 255, 255, opacity);
                 node.getComponent(UITransform)!.setContentSize(w, h);
                 node.setSiblingIndex(used - 1);
                 const portrait = frame === 0 && this.save.skin === 'dufaxing';
@@ -666,19 +684,20 @@ export class GameApp extends Component {
                     if (!portrait) { if (part) part.active = false; continue; }
                     if (!part) {
                         part = makeNode('portrait-band-' + band);
+                        part.active = false;
                         part.addComponent(UITransform); part.addComponent(Sprite); node.addChild(part);
                     }
-                    part.active = true;
                     const phase = layer === this.previewLayer ? this.clock : this.mouthClock;
                     const mouth = 55 * (0.15 + 0.85 * (0.5 + 0.5 * Math.sin(phase * Math.PI * 3)));
                     const heights = [350, mouth, 215];
                     const top = band === 0 ? 0 : band === 1 ? 350 : 350 + mouth;
                     const scale = h / 620;
                     part.setPosition(0, h / 2 - (top + heights[band] / 2) * scale);
-                    part.getComponent(UITransform)!.setContentSize(w, heights[band] * scale + 0.35);
                     const image = part.getComponent(Sprite)!;
-                    image.spriteFrame = this.skinFrames.get('dufaxing')![27 + band];
                     image.sizeMode = Sprite.SizeMode.CUSTOM;
+                    image.spriteFrame = this.skinFrames.get('dufaxing')![27 + band];
+                    part.getComponent(UITransform)!.setContentSize(w, heights[band] * scale + 0.35);
+                    part.active = true;
                 }
                 // Animate only the head display; the metal body stays unchanged.
                 let display = node.getChildByName('robot-display');
@@ -695,6 +714,7 @@ export class GameApp extends Component {
                         gfx.ellipse(0, h * 0.14, w * 0.26, h * 0.14); gfx.fill();
                     }
                 } else if (display) display.active = false;
+                node.active = true;
             }
         };
         const frames = this.skinFrames.get(this.save.skin)!;
@@ -1157,7 +1177,25 @@ export class GameApp extends Component {
             else if (action === 'start') this.startGame();
             return;
         }
-        if (k === KeyCode.SPACE || k === KeyCode.KEY_P) {
+        if (k === KeyCode.SPACE) {
+            if (this.phase === 'playing' && this.world) {
+                const g = this.grid;
+                const interval = intervalMs(GAME_SPEED, this.world.mode, this.world.eaten, this.world.slowLeft) / 1000;
+                const lead = Math.max(0, Math.min(.999, this.acc / interval));
+                const head = snakePolylines(this.world, lead, g.cell, g.cols, g.rows).head;
+                const hp = this.world.mode === 'zen' ? skinHeadPosition(head.x, head.y, head.face, g.cell, g.w, g.h) : [head.x, head.y];
+                // Centre of the open mouth band in the portrait, rotated with the head.
+                const offset = skinHeadSize(g.cell).h * (0.5 - 377.5 / 620);
+                const mouth: [number,number] = [(hp[0]+head.face[0]*offset)/g.cell-.5,
+                    g.rows-.5-(hp[1]+head.face[1]*offset)/g.cell];
+                if (this.world.castSkill(this.save.skin, mouth)) {
+                    this.mouthClock = 1 / 6;
+                    this.play('eat');
+                }
+            }
+            return;
+        }
+        if (k === KeyCode.KEY_P) {
             if (this.clock - this.lastToggle < 0.18) return;
             this.lastToggle = this.clock;
             if (this.phase === 'playing') {
@@ -1534,6 +1572,12 @@ export class GameApp extends Component {
                 this.tongueFlick = 0.001;
                 const sound: Record<string, string> = { berry: 'eat', star: 'star', slow: 'slow', mult: 'mult' };
                 this.play(sound[ev.kind]);
+            } else if (ev.type === 'skill-eat' && ev.x !== undefined && ev.y !== undefined) {
+                const p = cellCenter(ev.x, ev.y, this.grid.cell, this.grid.rows);
+                this.fx.burst(p[0], p[1], '#f5e89c', 12, 140);
+                this.fx.popup(p[0], p[1], '+40', '#f5e89c');
+                this.scoreHot = 0.16; this.happy = 0.28;
+                this.play('eat');
             } else if (ev.type === 'die') {
                 this.rememberScore();
                 this.phase = 'dying';

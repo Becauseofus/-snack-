@@ -12,15 +12,15 @@ class LocalInstaller {
    else {
     Application.EnableVisualStyles();
     using (var picker = new FolderBrowserDialog()) {
-     picker.Description = "选择独立文件夹安装「贪吃蛇 · 杜发星本地版」";
-     picker.SelectedPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "Snake-Codex");
+     picker.Description = "选择独立文件夹安装「贪吃蛇」";
+     picker.SelectedPath = Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.LocalApplicationData), "Programs", "贪吃蛇");
      if (picker.ShowDialog() != DialogResult.OK) return 0;
      destination = picker.SelectedPath;
     }
    }
    destination = Path.GetFullPath(destination).TrimEnd(Path.DirectorySeparatorChar);
    if (destination == Path.GetPathRoot(destination).TrimEnd(Path.DirectorySeparatorChar)) throw new Exception("请选择独立文件夹，不能选择磁盘根目录。");
-   if (File.Exists(Path.Combine(destination,"Snake.exe")) && !File.Exists(Path.Combine(destination,"LOCAL-BUILD.txt"))) throw new Exception("此文件夹已有其他版本，请另选一个文件夹。");
+   if ((File.Exists(Path.Combine(destination,"Snake.exe")) || File.Exists(Path.Combine(destination,"贪吃蛇.exe"))) && !File.Exists(Path.Combine(destination,"LOCAL-BUILD.txt"))) throw new Exception("此文件夹已有其他版本，请另选一个文件夹。");
    Directory.CreateDirectory(destination);
    using (var stream = Assembly.GetExecutingAssembly().GetManifestResourceStream("payload.zip"))
    using (var archive = new ZipArchive(stream, ZipArchiveMode.Read)) {
@@ -32,13 +32,15 @@ class LocalInstaller {
      using (var input = entry.Open()) using (var output = File.Create(target)) input.CopyTo(output);
     }
    }
+   File.Copy(Path.Combine(destination,"Snake.exe"), Path.Combine(destination,"贪吃蛇.exe"), true);
+   File.Delete(Path.Combine(destination,"Snake.exe"));
    if (!silent) {
     dynamic shell = Activator.CreateInstance(Type.GetTypeFromProgID("WScript.Shell"));
-    dynamic shortcut = shell.CreateShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "贪吃蛇-杜发星.lnk"));
-    shortcut.TargetPath = Path.Combine(destination, "Snake.exe");
+    dynamic shortcut = shell.CreateShortcut(Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.DesktopDirectory), "贪吃蛇.lnk"));
+    shortcut.TargetPath = Path.Combine(destination, "贪吃蛇.exe");
     shortcut.WorkingDirectory = destination;
     shortcut.Save();
-    MessageBox.Show("安装完成。通过桌面「贪吃蛇-杜发星」启动，在皮肤菜单中选择「杜发星」。\n\n安装目录：" + destination, "杜发星本地版");
+    MessageBox.Show("安装完成。通过桌面「贪吃蛇」启动，在皮肤菜单中选择「杜发星」。\n\n安装目录：" + destination, "贪吃蛇");
    }
    return 0;
   } catch (Exception e) {

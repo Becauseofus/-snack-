@@ -433,7 +433,9 @@ function soundTab(labels: LabelSpec[], buttons: ButtonSpec[], m: UiModel, c: Ctx
 /* 玩法 */
 const HELP_ROWS: Array<[string, string]> = [
     ['方向键 / WASD', '转向，可提前存两次'],
-    ['空格 / P', '暂停或继续'],
+    ['空格', '释放当前皮肤技能'],
+    ['P', '暂停或继续'],
+    ['吐痰 · 20秒', '杜发星：淡黄球反弹，吃掉 +40'],
     ['R', '重新开始'],
     ['H / F1', '打开设置 · 玩法'],
     ['Esc', '关面板 / 暂停 / 回标题'],
@@ -454,10 +456,11 @@ function helpTab(labels: LabelSpec[], buttons: ButtonSpec[], m: UiModel, c: Ctx)
     let y = c.y;
     for (let i = 0; i < HELP_ROWS.length && i < rows; i++) {
         const [key, val] = HELP_ROWS[i];
-        const isFood = i === 6 || i === 7;
-        const isMode = i >= 8;
-        const anyKey = i === 5;
-        const color = isMode ? MODE_COLOR[(['classic', 'zen', 'challenge'] as Mode[])[i - 8]] : isFood || anyKey ? GOLD : ACCENT;
+        const isFood = key === '浆果 +10' || key === '时砂 慢动作' || key === '吐痰 · 20秒';
+        const modeIndex = ['经典', '禅意', '挑战'].indexOf(key);
+        const isMode = modeIndex >= 0;
+        const anyKey = key === '任意键';
+        const color = isMode ? MODE_COLOR[(['classic', 'zen', 'challenge'] as Mode[])[modeIndex]] : isFood || anyKey ? GOLD : ACCENT;
         label(labels, 'help-k-' + i, key, c.x, y, 12, color, { bold: true });
         label(labels, 'help-v-' + i, val, c.x + keyW, y, 12, TEXT, { w: c.w - keyW });
         y -= rowH;
@@ -625,8 +628,8 @@ export function layoutChrome(W: number, H: number, ui: UiModel, clock = 0): Chro
             labels,
             'hint',
             narrow
-                ? '方向键 / WASD · 空格暂停 · R 重开 · H 设置'
-                : '方向键 / WASD 转向（可预存两次）· 空格暂停 · R 重开 · H 设置',
+                ? '方向键 / WASD · 空格技能 · P 暂停 · R 重开 · H 设置'
+                : '方向键 / WASD 转向（可预存两次）· 空格技能 · P 暂停 · R 重开 · H 设置',
             pad,
             16,
             12,
@@ -678,7 +681,7 @@ function pauseAndOver(labels: LabelSpec[], cards: DrawCmd[], m: UiModel, field: 
         const h = Math.min(fieldH - 40, 220);
         cards.push(...paintCard(cx, cy, w, h, ACCENT));
         label(labels, 'pause-title', '暂停', cx, cy + 0.22 * h, Math.max(22, 0.7 * unit), TEXT, { bold: true, align: 'center', parent: 'field' });
-        label(labels, 'pause-keys', '空格继续    ·    R 重新开始    ·    H 设置    ·    Esc 返回标题', cx, cy - 8, Math.max(11, unit / 3), MUTED, {
+        label(labels, 'pause-keys', 'P / Enter 继续    ·    R 重新开始    ·    H 设置    ·    Esc 返回标题', cx, cy - 8, Math.max(11, unit / 3), MUTED, {
             align: 'center',
             w: w - 24,
             parent: 'field',
