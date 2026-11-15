@@ -30,7 +30,7 @@ export type SettingsTab = 'skins' | 'display' | 'sound' | 'help' | 'record';
 
 export interface UiModel {
     phase: Phase;
-    skin?: 'classic' | 'dragon' | 'robot' | 'candy';
+    skin?: 'classic' | 'dragon' | 'robot' | 'candy' | 'dufaxing';
     /** 帧率上限，0 表示不限 */
     fps?: number;
     settingsOpen: boolean;
@@ -301,8 +301,8 @@ function settingsPanel(
         sectionTitle(labels, box, '选择皮肤 · 自动保存');
         const skinW = Math.min(180, box.w * 0.45);
         label(labels, 'skin-preview-title', '皮肤预览', box.x + skinW + 16, box.y + 8, 12, MUTED, {w: box.w - skinW - 16});
-        const skinGap = Math.min(44, (box.y - box.bottom + 12) / 4);
-        for (const [id, name] of [['classic', '经典青蛇'], ['dragon', '金鳞祥龙'], ['robot', '霓光机械蛇'], ['candy', '草莓糖果蛇']]) {
+        const skinGap = Math.min(44, (box.y - box.bottom + 12) / 5);
+        for (const [id, name] of [['classic', '经典青蛇'], ['dragon', '金鳞祥龙'], ['robot', '霓光机械蛇'], ['candy', '草莓糖果蛇'], ['dufaxing', '杜发星']]) {
             button(buttons, 'skin-' + id, name, box.x + skinW / 2, box.y, skinW, Math.min(32, skinGap - 5), { parent: 'field', selected: (m.skin || 'classic') === id });
             box.y -= skinGap;
         }

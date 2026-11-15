@@ -172,6 +172,7 @@ export class GameApp extends Component {
 
     private acc = 0;
     private clock = 0;
+    private mouthClock = 0;
     private happy = 0;
     private shake = 0;
     private dieLeft = 0;
@@ -247,6 +248,7 @@ export class GameApp extends Component {
             dragon: [[100,15,540,590],[830,160,210,70],[830,670,210,560]],
             robot: [[170,90,370,445],[820,230,215,145],[820,670,220,490]],
             candy: [[170,20,380,600],[780,180,235,150],[780,710,240,495]],
+            dufaxing: [[150,5,360,620],[795,350,245,100],[795,700,245,510]],
         };
         for (const [skin, rects] of Object.entries(atlasRects)) {
             resources.load('skins/' + skin + '/texture', Texture2D, (err, texture) => {
@@ -264,6 +266,15 @@ export class GameApp extends Component {
                     frames.push(strip);
                 }
                 this.skinFrames.set(skin, frames);
+                if (skin === 'dufaxing') {
+                    // Head bands share exact edges; compress the mouth band and lift
+                    // the lower jaw, preserving the original artwork and upper face.
+                    for (const [y, height] of [[5, 350], [355, 55], [410, 215]]) {
+                        const band = new SpriteFrame(); band.texture = texture;
+                        band.rect = new Rect(150, y, 360, height);
+                        frames.push(band);
+                    }
+                }
             });
         }
         input.on(Input.EventType.KEY_DOWN, this.onKey, this);
@@ -288,6 +299,7 @@ export class GameApp extends Component {
     update(dt: number): void {
         const d = Math.min(0.05, Math.max(0, dt));
         this.clock += d;
+        if (this.phase === 'menu' || (this.phase === 'playing' && !this.settingsOpen)) this.mouthClock += d;
         if (this.happy > 0) this.happy = Math.max(0, this.happy - d);
         if (this.shake > 0) this.shake = Math.max(0, this.shake - d);
         if (this.scoreHot > 0) this.scoreHot = Math.max(0, this.scoreHot - d);
@@ -647,6 +659,27 @@ export class GameApp extends Component {
                 const sprite = node.getComponent(Sprite)!; sprite.spriteFrame = this.skinFrames.get(this.save.skin)![frame]; sprite.sizeMode = Sprite.SizeMode.CUSTOM; sprite.color = new Color(255, 255, 255, opacity);
                 node.getComponent(UITransform)!.setContentSize(w, h);
                 node.setSiblingIndex(used - 1);
+                const portrait = frame === 0 && this.save.skin === 'dufaxing';
+                sprite.enabled = !portrait;
+                for (let band = 0; band < 3; band++) {
+                    let part = node.getChildByName('portrait-band-' + band);
+                    if (!portrait) { if (part) part.active = false; continue; }
+                    if (!part) {
+                        part = makeNode('portrait-band-' + band);
+                        part.addComponent(UITransform); part.addComponent(Sprite); node.addChild(part);
+                    }
+                    part.active = true;
+                    const phase = layer === this.previewLayer ? this.clock : this.mouthClock;
+                    const mouth = 55 * (0.15 + 0.85 * (0.5 + 0.5 * Math.sin(phase * Math.PI * 3)));
+                    const heights = [350, mouth, 215];
+                    const top = band === 0 ? 0 : band === 1 ? 350 : 350 + mouth;
+                    const scale = h / 620;
+                    part.setPosition(0, h / 2 - (top + heights[band] / 2) * scale);
+                    part.getComponent(UITransform)!.setContentSize(w, heights[band] * scale + 0.35);
+                    const image = part.getComponent(Sprite)!;
+                    image.spriteFrame = this.skinFrames.get('dufaxing')![27 + band];
+                    image.sizeMode = Sprite.SizeMode.CUSTOM;
+                }
                 // Animate only the head display; the metal body stays unchanged.
                 let display = node.getChildByName('robot-display');
                 if (frame === 0 && this.save.skin === 'robot') {
@@ -685,6 +718,7 @@ export class GameApp extends Component {
             }
         }
         const headSize = skinHeadSize(g.cell);
+        if (this.save.skin === 'dufaxing') headSize.w = headSize.h * frames[0].rect.width / frames[0].rect.height;
         const horizontal = Math.abs(geo.head.face[0]) >= Math.abs(geo.head.face[1]);
         const headPos = wrap ? skinHeadPosition(geo.head.x, geo.head.y, geo.head.face, g.cell, g.w, g.h) : [geo.head.x, geo.head.y];
         place(headPos[0], headPos[1], Math.atan2(geo.head.face[1], geo.head.face[0])*180/Math.PI-90, 0, headSize.w, headSize.h, horizontal, !horizontal);
@@ -1042,7 +1076,7 @@ export class GameApp extends Component {
             return;
         }
         if (id === 'skins') { this.toggleSettings('skins'); return; }
-        if (['skin-classic', 'skin-dragon', 'skin-robot', 'skin-candy'].includes(id)) {
+        if (['skin-classic', 'skin-dragon', 'skin-robot', 'skin-candy', 'skin-dufaxing'].includes(id)) {
             this.save.skin = id.slice(5) as SaveData['skin']; this.persist(); return;
         }
         if (id === 'settings') {

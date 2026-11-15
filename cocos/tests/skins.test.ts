@@ -19,7 +19,7 @@ test('shared mascot geometry fits title and preview', () => {
 });
 import { sanitizeSave } from '../assets/scripts/logic/config';
 test('new skins survive save round trips', () => {
-    for (const skin of ['robot', 'candy']) {
+    for (const skin of ['robot', 'candy', 'dufaxing']) {
         const save = sanitizeSave({skin, best: 240});
         assert.equal(sanitizeSave(JSON.parse(JSON.stringify(save))).skin, skin);
         assert.equal(save.best, 240);
