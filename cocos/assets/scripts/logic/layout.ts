@@ -455,7 +455,8 @@ function helpTab(labels: LabelSpec[], buttons: ButtonSpec[], m: UiModel, c: Ctx)
     const rows = Math.floor((c.y - c.bottom) / rowH) + 1;
     let y = c.y;
     for (let i = 0; i < HELP_ROWS.length && i < rows; i++) {
-        const [key, val] = HELP_ROWS[i];
+        const [key, description] = HELP_ROWS[i];
+        const val = key === '空格' && m.skin === 'dragon' ? '盘身 7 秒，期间可移动和转向' : description;
         const isFood = key === '浆果 +10' || key === '时砂 慢动作' || key === '吐痰 · 20秒';
         const modeIndex = ['经典', '禅意', '挑战'].indexOf(key);
         const isMode = modeIndex >= 0;
@@ -663,6 +664,9 @@ export function layoutChrome(W: number, H: number, ui: UiModel, clock = 0): Chro
         button(buttons, 'pad-down', '下', px, py - size - gap, size, size, { parent: 'field' });
         button(buttons, 'pad-left', '左', px - size - gap, py, size, size, { parent: 'field' });
         button(buttons, 'pad-right', '右', px + size + gap, py, size, size, { parent: 'field' });
+        if (ui.skin === 'dragon' && ui.phase === 'playing' && !ui.settingsOpen) {
+            button(buttons, 'dragon-coil', '盘身', 54, py, 76, size, { parent: 'field' });
+        }
     }
 
     if (ui.phase === 'menu' && !ui.settingsOpen) menuDecor(labels, field);

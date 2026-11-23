@@ -82,3 +82,25 @@ app.phase='playing';app.settingsOpen=true;
 app.update(.05);app.onKey({keyCode:32});
 assert.equal(JSON.stringify([app.world.spits,app.world.skillCooldowns]),paused);
 console.log('PASS: Space casts without pausing; P pauses; menus freeze skills');
+
+app.settingsOpen = false;
+app.save.skin = 'dragon';
+app.dragonLayer = new Node('dragon');
+app.coilLayer = new Node('dragon-coil');
+app.coilFrames = Array.from({length: 9}, () => ({rect: {width: 448, height: 448}}));
+app.drawDragon(0);
+assert.equal(app.dragonLayer.active, true);
+assert.equal(app.coilLayer.active, false);
+app.onKey({keyCode: 32});
+for (const [remaining, index] of [[7, 0], [6.8, 1], [4, 4], [0.1, 8]]) {
+  app.world.dragonCoilLeft = remaining;
+  app.drawDragon(0);
+  assert.equal(app.dragonLayer.active, false, 'The ordinary skin must not overlap the coil');
+  assert.equal(app.coilLayer.active, true);
+  assert.equal(app.coilLayer.children[0].getComponent(Sprite).frame, app.coilFrames[index]);
+}
+app.world.tickSkills(0.1);
+app.drawDragon(0);
+assert.equal(app.dragonLayer.active, true);
+assert.equal(app.coilLayer.active, false);
+console.log('PASS: coiling and uncoiling replace the regular skin for the entire skill');

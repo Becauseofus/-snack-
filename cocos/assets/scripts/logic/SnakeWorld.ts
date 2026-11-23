@@ -1,6 +1,6 @@
 /** 格子规则。画面插值不在这里做。与 Python 版 SnakeWorld 对齐。 */
 
-import { FOOD_SCORE, type FoodKind, type Mode, MODES, SKIN_SKILLS, type SaveData } from './config';
+import { DRAGON_COIL_SECONDS, FOOD_SCORE, type FoodKind, type Mode, MODES, SKIN_SKILLS, type SaveData } from './config';
 
 export type Cell = [number, number];
 export type Dir = [number, number];
@@ -90,6 +90,7 @@ export class SnakeWorld {
     special: SpecialFood | null = null;
     deathFace: Dir = [1, 0];
     deathGrow = false;
+    dragonCoilLeft = 0;
     skillCooldowns: Partial<Record<SaveData['skin'], number>> = {};
     spits: Spit[] = [];
 
@@ -123,6 +124,7 @@ export class SnakeWorld {
         this.special = null;
         this.deathFace = [1, 0];
         this.deathGrow = false;
+        this.dragonCoilLeft = 0;
         this.skillCooldowns = {};
         this.spits = [];
         this.spawnBerry();
@@ -149,8 +151,14 @@ export class SnakeWorld {
     }
 
     castSkill(skin: SaveData['skin'], mouth?: Cell): boolean {
+        if (!this.alive || this.won) return false;
+        if (skin === 'dragon') {
+            if (this.dragonCoilLeft > 0) return false;
+            this.dragonCoilLeft = DRAGON_COIL_SECONDS;
+            return true;
+        }
         const skill = SKIN_SKILLS[skin];
-        if (!skill || !this.alive || this.won || (this.skillCooldowns[skin] ?? 0) > 0) return false;
+        if (!skill || (this.skillCooldowns[skin] ?? 0) > 0) return false;
         if (skin !== 'dufaxing') return false;
         const [mx, my] = mouth ?? this.snake[0];
         const x = Math.max(-0.2, Math.min(this.cols - 0.8, mx));
@@ -183,6 +191,8 @@ export class SnakeWorld {
 
     tickSkills(dt: number): WorldEvent[] {
         if (!this.alive || this.won || !Number.isFinite(dt) || dt <= 0) return [];
+        // Repeated frame deltas can leave a rounding residue at the exact end time.
+        this.dragonCoilLeft = this.dragonCoilLeft <= dt + 1e-9 ? 0 : this.dragonCoilLeft - dt;
         for (const skin of Object.keys(this.skillCooldowns) as SaveData['skin'][]) {
             this.skillCooldowns[skin] = Math.max(0, this.skillCooldowns[skin]! - dt);
         }
@@ -242,6 +252,7 @@ export class SnakeWorld {
         const m = this.motion();
         if (m.fatal) {
             this.alive = false;
+            this.dragonCoilLeft = 0;
             this.deathFace = m.dir;
             this.deathGrow = m.will_grow;
             return [{ type: 'die', x: m.nx, y: m.ny }];
@@ -267,6 +278,7 @@ export class SnakeWorld {
             this.maybeSpecial();
         }
         if (this.won) {
+            this.dragonCoilLeft = 0;
             events.push({ type: 'win' });
         }
         return events;

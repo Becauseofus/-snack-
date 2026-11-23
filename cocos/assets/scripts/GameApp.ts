@@ -34,6 +34,7 @@ import {
     BODY_A,
     CYAN,
     defaultSave,
+    DRAGON_COIL_SECONDS,
     SKIN_SKILLS,
     fpsToEngine,
     sanitizeFps,
@@ -64,6 +65,9 @@ const { ccclass } = _decorator;
 const FONT = 'Microsoft YaHei, PingFang SC, Noto Sans SC, WenQuanYi Micro Hei, sans-serif';
 const SOUND_KEYS = ['eat', 'star', 'slow', 'mult', 'die', 'start', 'pause', 'record'] as const;
 const POPUP_POOL = 6;
+// The fifth pose holds until the last four frames have time to play.
+const COIL_IN_ENDS = [0.160, 0.265, 0.375, 0.500];
+const COIL_OUT_STARTS = [0.540, 0.420, 0.300, 0.160];
 // 速度条已移除，节奏固定；禅意/挑战由模式自行修正
 const GAME_SPEED = 5;
 
@@ -167,6 +171,8 @@ export class GameApp extends Component {
     private skinFrames = new Map<string, SpriteFrame[]>();
     private dragonNodes: Node[] = [];
     private dragonLayer: Node | null = null;
+    private coilLayer: Node | null = null;
+    private coilFrames: SpriteFrame[] = [];
     private clips = new Map<string, AudioClip>();
     private audio: AudioSource | null = null;
     private soundAvailable = false;
@@ -279,6 +285,16 @@ export class GameApp extends Component {
                 }
             });
         }
+        resources.load('skins/dragon-coil/texture', Texture2D, (err, texture) => {
+            if (err) { console.error('Dragon coil load failed', err); return; }
+            const tile = 448;
+            for (let index = 0; index < 9; index++) {
+                const frame = new SpriteFrame();
+                frame.texture = texture;
+                frame.rect = new Rect(index % 3 * tile, Math.floor(index / 3) * tile, tile, tile);
+                this.coilFrames.push(frame);
+            }
+        });
         input.on(Input.EventType.KEY_DOWN, this.onKey, this);
         view.on('canvas-resize', this.onResize, this);
         game.on(Game.EVENT_HIDE, this.onHide, this);
@@ -366,6 +382,8 @@ export class GameApp extends Component {
 
         this.dragonLayer = makeNode('dragon');
         this.fieldNode.addChild(this.dragonLayer);
+        this.coilLayer = makeNode('dragon-coil');
+        this.fieldNode.addChild(this.coilLayer);
         const skillNode = makeNode('skill-projectiles');
         this.fieldNode.addChild(skillNode);
         this.skillGraphics = skillNode.addComponent(Graphics);
@@ -436,6 +454,10 @@ export class GameApp extends Component {
         if (world && skill) {
             const left = Math.ceil(world.skillCooldowns[this.save.skin] ?? 0);
             buff.push(skill.name + (left > 0 ? ' ' + left + 's' : ' · 空格释放'));
+        }
+        if (world?.alive && !world.won && this.save.skin === 'dragon' && this.coilFrames.length > 0) {
+            const left = Math.ceil(world.dragonCoilLeft);
+            buff.push(left > 0 ? `盘身 ${left}s` : '盘身 · 空格释放');
         }
         if (world && (this.phase === 'playing' || this.phase === 'paused' || this.phase === 'dying')) {
             if (world.slowLeft > 0) buff.push('慢动作 ' + world.slowLeft.toFixed(1) + 's');
@@ -637,12 +659,55 @@ export class GameApp extends Component {
 
     private drawDragon(lead: number): void {
         const active = this.skinFrames.has(this.save.skin);
-        this.dragonLayer!.active = active;
+        const left = this.save.skin === 'dragon' ? (this.world?.dragonCoilLeft ?? 0) : 0;
+        const coiled = active && left > 0;
+        this.dragonLayer!.active = active && !coiled;
+        this.coilLayer!.active = coiled;
         if (!active) return;
         const g = this.grid;
         const menu = this.phase === 'menu' || !this.world;
         const geo = menu ? mascotGeometry(g.w, g.h, g.cell, this.clock) : snakePolylines(this.world!, lead, g.cell, g.cols, g.rows);
-        this.renderDragon(this.dragonLayer!, this.dragonNodes, geo, {...g, cell: menu ? Math.max(16, Math.min(g.cell, 34)) : g.cell}, !menu && this.world!.mode === 'zen');
+        const wrap = !menu && this.world!.mode === 'zen';
+        if (coiled) this.drawDragonCoil(geo.head, left, wrap);
+        else this.renderDragon(this.dragonLayer!, this.dragonNodes, geo, {...g, cell: menu ? Math.max(16, Math.min(g.cell, 34)) : g.cell}, wrap);
+    }
+
+    private drawDragonCoil(head: SnakeGeometry['head'], remaining: number, wrap: boolean): void {
+        const layer = this.coilLayer!;
+        const { cell, w, h } = this.grid;
+        const elapsed = DRAGON_COIL_SECONDS - remaining;
+        const frameIndex = COIL_IN_ENDS.filter(end => elapsed >= end).length +
+            COIL_OUT_STARTS.filter(start => remaining <= start).length;
+        const frame = this.coilFrames[frameIndex];
+        const size = cell * 4;
+        const radius = size * Math.SQRT1_2;
+        const offsets = wrap ? [-1, 0, 1] : [0];
+        const [dx, dy] = head.face;
+        const angle = Math.atan2(dy, dx) * 180 / Math.PI - 90;
+        // In the extended drawings the head is near the top of the tile.
+        // Move the tile centre back as the artwork extends so the head stays near its cell.
+        const extended = 1 - Math.min(1, elapsed / COIL_IN_ENDS[3], remaining / COIL_OUT_STARTS[0]);
+        const headOffset = size * 0.29 * extended;
+        let used = 0;
+        for (const offsetX of offsets) for (const offsetY of offsets) {
+            const x = head.x - dx * headOffset + offsetX * w;
+            const y = head.y - dy * headOffset + offsetY * h;
+            if (x < -radius || x > w + radius || y < -radius || y > h + radius) continue;
+            let node = layer.children[used++];
+            if (!node) {
+                node = makeNode('coil-pose');
+                node.addComponent(UITransform);
+                node.addComponent(Sprite).sizeMode = Sprite.SizeMode.CUSTOM;
+                layer.addChild(node);
+            }
+            node.setPosition(x, y);
+            node.angle = angle;
+            const sprite = node.getComponent(Sprite)!;
+            sprite.spriteFrame = frame;
+            node.getComponent(UITransform)!.setContentSize(size, size);
+            node.active = true;
+        }
+        for (let index = used; index < layer.children.length; index++) layer.children[index].active = false;
     }
 
     private drawSkinPreview(lay: Chrome): void {
@@ -1071,6 +1136,10 @@ export class GameApp extends Component {
 
     private onButton(id: string): void {
         this.tones.resume();
+        if (id === 'dragon-coil') {
+            this.castDragonCoil();
+            return;
+        }
         if (id.indexOf('mode-') === 0) {
             this.selectMode(id.slice(5) as Mode);
             return;
@@ -1097,7 +1166,11 @@ export class GameApp extends Component {
         }
         if (id === 'skins') { this.toggleSettings('skins'); return; }
         if (['skin-classic', 'skin-dragon', 'skin-robot', 'skin-candy', 'skin-dufaxing'].includes(id)) {
-            this.save.skin = id.slice(5) as SaveData['skin']; this.persist(); return;
+            const skin = id.slice(5) as SaveData['skin'];
+            if (skin !== 'dragon' && this.world) this.world.dragonCoilLeft = 0;
+            this.save.skin = skin;
+            this.persist();
+            return;
         }
         if (id === 'settings') {
             this.toggleSettings(this.settingsTab);
@@ -1145,6 +1218,13 @@ export class GameApp extends Component {
         }
     }
 
+    private castDragonCoil(): void {
+        if (this.phase === 'playing' && !this.settingsOpen && this.save.skin === 'dragon' &&
+            this.skinFrames.has('dragon') && this.coilFrames.length > 0) {
+            this.world?.castSkill('dragon');
+        }
+    }
+
     private onKey = (e: EventKeyboard): void => {
         this.tones.resume();
         const k = e.keyCode;
@@ -1178,7 +1258,9 @@ export class GameApp extends Component {
             return;
         }
         if (k === KeyCode.SPACE) {
-            if (this.phase === 'playing' && this.world) {
+            if (this.save.skin === 'dragon') {
+                this.castDragonCoil();
+            } else if (this.save.skin === 'dufaxing' && this.phase === 'playing' && this.world) {
                 const g = this.grid;
                 const interval = intervalMs(GAME_SPEED, this.world.mode, this.world.eaten, this.world.slowLeft) / 1000;
                 const lead = Math.max(0, Math.min(.999, this.acc / interval));

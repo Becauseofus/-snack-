@@ -40,7 +40,7 @@ class LocalInstaller {
     shortcut.TargetPath = Path.Combine(destination, "贪吃蛇.exe");
     shortcut.WorkingDirectory = destination;
     shortcut.Save();
-    MessageBox.Show("安装完成。通过桌面「贪吃蛇」启动，在皮肤菜单中选择「杜发星」。\n\n安装目录：" + destination, "贪吃蛇");
+    MessageBox.Show("安装完成。通过桌面「贪吃蛇」启动，在皮肤菜单中选择「金鳞祥龙」，对局中按空格盘身。\n\n安装目录：" + destination, "贪吃蛇");
    }
    return 0;
   } catch (Exception e) {

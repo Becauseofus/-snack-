@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 import { SnakeWorld } from '../assets/scripts/logic/SnakeWorld';
+import { intervalMs } from '../assets/scripts/logic/config';
 import { paintField } from '../assets/scripts/logic/paint';
 import { FX } from '../assets/scripts/logic/fx';
 
@@ -11,7 +12,7 @@ function world(mode: 'classic' | 'zen' = 'classic') {
 }
 test('skill dispatch, twenty-second cooldown, and new-round reset', () => {
     const w=world();
-    for(const skin of ['classic','dragon','robot','candy'] as const) assert.equal(w.castSkill(skin),false);
+    for(const skin of ['classic','robot','candy'] as const) assert.equal(w.castSkill(skin),false);
     assert.equal(w.castSkill('dufaxing'),true);
     assert.equal(w.spits.length,1);
     assert.equal(w.castSkill('dufaxing'),false);
@@ -27,6 +28,35 @@ test('skill dispatch, twenty-second cooldown, and new-round reset', () => {
     w.tickSkills(10);
     assert.equal(w.spits[0].x,x);
     assert.equal(w.skillCooldowns.dufaxing,cooldown);
+});
+test('dragon coil lasts seven seconds and preserves turns, growth and challenge speed', () => {
+    const coiled = new SnakeWorld(40, 14, 'challenge', undefined, false);
+    const control = new SnakeWorld(40, 14, 'challenge', undefined, false);
+    assert.equal(coiled.castSkill('dragon'), true);
+    const initialSpeed = intervalMs(5, 'challenge', 0, 0);
+    for (let n = 0; n < 8; n++) {
+        for (const w of [coiled, control]) {
+            const [x, y] = w.snake[0];
+            const [dx, dy] = w.direction;
+            w.berry = [x + dx, y + dy];
+            if (n === 3) assert.equal(w.turn(0, -1), true);
+            w.step();
+            w.tickSkills(0.25);
+        }
+        assert.deepEqual(coiled.snake, control.snake);
+        assert.equal(intervalMs(5, coiled.mode, coiled.eaten, coiled.slowLeft),
+            intervalMs(5, control.mode, control.eaten, control.slowLeft));
+    }
+    assert.deepEqual(coiled.direction, [0, -1]);
+    assert.ok(intervalMs(5, coiled.mode, coiled.eaten, coiled.slowLeft) < initialSpeed);
+    assert.equal(coiled.castSkill('dragon'), false);
+    for (let frame = 0; frame < 299; frame++) coiled.tickSkills(1 / 60);
+    assert.ok(coiled.dragonCoilLeft > 0);
+    coiled.tickSkills(1 / 60);
+    assert.equal(coiled.dragonCoilLeft, 0);
+    assert.equal(coiled.castSkill('dragon'), true);
+    coiled.reset();
+    assert.equal(coiled.dragonCoilLeft, 0);
 });
 test('spit starts at supplied mouth and chooses a random direction at constant speed', () => {
     const velocities: number[][]=[];
