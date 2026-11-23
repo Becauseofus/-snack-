@@ -1,4 +1,4 @@
-/** 格子规则。画面插值不在这里做。与 Python 版 SnakeWorld 对齐。 */
+/** 格子规则。与 Python 版 SnakeWorld 对齐。 */
 
 import { DRAGON_COIL_SECONDS, FOOD_SCORE, type FoodKind, type Mode, MODES, SKIN_SKILLS, type SaveData } from './config';
 import { dragonCoilPose, dragonCoilTouches, type DragonCoilPose } from './dragonCoil';
@@ -92,7 +92,6 @@ export class SnakeWorld {
     deathFace: Dir = [1, 0];
     deathGrow = false;
     dragonCoilLeft = 0;
-    private coilArrival: Dir | null = null;
     skillCooldowns: Partial<Record<SaveData['skin'], number>> = {};
     spits: Spit[] = [];
 
@@ -127,7 +126,6 @@ export class SnakeWorld {
         this.deathFace = [1, 0];
         this.deathGrow = false;
         this.dragonCoilLeft = 0;
-        this.coilArrival = null;
         this.skillCooldowns = {};
         this.spits = [];
         this.spawnBerry();
@@ -160,7 +158,6 @@ export class SnakeWorld {
         if (skin === 'dragon') {
             if (this.dragonCoilLeft > 0) return false;
             this.dragonCoilLeft = DRAGON_COIL_SECONDS;
-            this.coilArrival = null;
             this.skillCooldowns[skin] = skill.cooldown;
             return true;
         }
@@ -174,8 +171,15 @@ export class SnakeWorld {
         return true;
     }
 
+    headAt(lead: number): Cell {
+        const [x, y] = this.snake[0];
+        const [dx, dy] = this.alive ? this.direction : this.deathFace;
+        const distance = this.alive ? lead : 1;
+        return [x + dx * distance, y + dy * distance];
+    }
+
     coilPose(lead: number): DragonCoilPose {
-        return dragonCoilPose(this.snake[0], this.direction, this.dragonCoilLeft, this, lead, this.coilArrival);
+        return dragonCoilPose(this.headAt(lead), this.direction, this.dragonCoilLeft, this);
     }
 
     private collectCoilFood(pose: DragonCoilPose): WorldEvent[] {
@@ -287,9 +291,6 @@ export class SnakeWorld {
         }
         const kind = m.will_eat ? this.kindAt(m.nx, m.ny) : null;
         const events = this.dragonCoilLeft > 0 ? [] : this.collectSpits(this.snake[0], [m.nx, m.ny]);
-        const [x, y] = this.snake[0];
-        const wrapped = m.nx !== x + m.dir[0] || m.ny !== y + m.dir[1];
-        this.coilArrival = this.dragonCoilLeft > 0 && wrapped ? m.dir : null;
         this.snake.unshift([m.nx, m.ny]);
         if (kind) {
             this.award(kind, events, m.nx, m.ny);

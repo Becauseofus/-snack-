@@ -542,8 +542,7 @@ export function snakePolylines(world: SnakeWorld, lead: number, cell: number, co
     const grown = alive ? world.motion().will_grow : world.deathGrow;
 
     const cells = unwrapCells(world, cols, rows);
-    const head = cells[0];
-    const raw: Pt[] = [[head[0] + dir[0] * glide, head[1] + dir[1] * glide]];
+    const raw: Pt[] = [world.headAt(lead)];
     for (const c of cells) raw.push([c[0], c[1]]);
 
     const tail = cells[cells.length - 1];
@@ -717,8 +716,8 @@ export function paintField(input: PaintInput): FieldFrame {
         paintFood(cmds, p[0], p[1], world.special.kind, cell, clock, blink);
     }
 
-    const geo = snakePolylines(world, input.lead, cell, cols, rows, input.pulse);
-    if (!input.hideSnake && geo.box.minX < Infinity) {
+    const geo = input.hideSnake ? null : snakePolylines(world, input.lead, cell, cols, rows, input.pulse);
+    if (geo && geo.box.minX < Infinity) {
         const offsets = wrapOffsets(geo.box, w, h, world.mode === 'zen');
         for (const off of offsets) {
             for (const run of geo.runs) emitRun(cmds, run, off[0], off[1], w, h);

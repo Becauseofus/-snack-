@@ -1,8 +1,8 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { SnakeWorld } from '../assets/scripts/logic/SnakeWorld';
+import { SnakeWorld, type Cell } from '../assets/scripts/logic/SnakeWorld';
 import { intervalMs } from '../assets/scripts/logic/config';
-import { paintField } from '../assets/scripts/logic/paint';
+import { paintField, snakePolylines } from '../assets/scripts/logic/paint';
 import { FX } from '../assets/scripts/logic/fx';
 
 function world(mode: 'classic' | 'zen' = 'classic') {
@@ -82,65 +82,66 @@ test('coiled body collects fruit and balls outside the head cell once', () => {
     assert.equal(w.snake.length, length + 3);
     assert.equal(w.pendingGrow, 0);
 });
-test('the coil ignores transparent padding and never collects across an unbroken seam', () => {
+test('coiled body contacts follow the visible pieces at the wrap seam', () => {
     const clear = world();
     const [hx, hy] = clear.snake[0];
     clear.berry = [hx - 2, hy - 1];
     clear.castSkill('dragon');
     assert.deepEqual(clear.tickSkills(0.01), []);
 
-    const zen = world('zen');
-    zen.snake = [[19, 7], [18, 7], [17, 7]];
-    zen.berry = [1, 7];
-    zen.castSkill('dragon');
-    assert.deepEqual(zen.tickSkills(0.5, 0.99), []);
-    zen.step();
-    assert.deepEqual(zen.tickSkills(0.01, 0), []);
-    assert.equal(zen.tickSkills(0.01, 0.85)[0]?.amount, 10);
+    const w = world('zen');
+    w.snake = [[18, 7], [17, 7], [16, 7]];
+    w.berry = [0, 7];
+    w.special = {x: 19, y: 7, kind: 'star', ttl: 9};
+    w.spits = [{x: 10, y: 7, vx: 0, vy: 0, armed: true}];
+    w.castSkill('dragon');
+    assert.deepEqual(w.tickSkills(0.5).map(e => e.amount), [30]);
+    w.step();
+    assert.deepEqual(w.tickSkills(0.01, 0.5).map(e => e.amount), [10]);
+    assert.equal(w.spits.length, 1);
+    assert.deepEqual(w.tickSkills(0.01, 0.51), []);
 });
-test('a turn queued at a seam preserves the arrival edge for the coiled sprite', () => {
+test('coiling follows the ordinary snake head through all four walls on every atlas frame', () => {
+    const cell = 32;
+    const cases: [Cell, Cell][] = [
+        [[17, 7], [1, 0]], [[2, 7], [-1, 0]],
+        [[8, 11], [0, 1]], [[8, 2], [0, -1]],
+    ];
+    for (const [head, dir] of cases) {
+        const w = world('zen');
+        w.snake = [head, [head[0] - dir[0], head[1] - dir[1]]];
+        w.direction = dir;
+        w.castSkill('dragon');
+        for (let step = 0; step < 6; step++, w.step()) {
+            for (let i = 0; i <= 24; i++) {
+                const lead = i / 24;
+                const {head: ordinary} = snakePolylines(w, lead, cell, w.cols, w.rows);
+                for (const remaining of [7, 6.8, 6.7, 6.6, 4, 0.5, 0.4, 0.2, 0.1]) {
+                    w.dragonCoilLeft = remaining;
+                    const pose = w.coilPose(lead);
+                    assert.ok(Math.abs(pose.x * cell - ordinary.x) < 1e-8);
+                    assert.ok(Math.abs((w.rows - pose.y) * cell - ordinary.y) < 1e-8);
+                }
+            }
+        }
+    }
+});
+test('turning along a wall keeps the same centre and clears the old projection', () => {
     const w = world('zen');
     w.snake = [[19, 7], [18, 7], [17, 7]];
     w.castSkill('dragon');
     w.tickSkills(0.5);
     assert.equal(w.turn(0, -1), true);
+    const leaving = w.coilPose(1);
     w.step();
-    assert.deepEqual(w.snake[0], [0, 7]);
-    assert.deepEqual(w.direction, [0, -1]);
-    const hidden = w.coilPose(0), entering = w.coilPose(0.75);
-    assert.equal(hidden.opacity, 0);
-    assert.ok(hidden.x < 0 && entering.x > hidden.x && entering.y < hidden.y);
-    w.step();
-    assert.equal(w.coilPose(0).opacity, 255);
-    assert.ok(w.coilPose(0).x > 0);
-});
-test('the coil keeps moving between the approach, exit, arrival and normal travel', () => {
-    const w = world('zen');
-    w.snake = [[8, 12], [8, 11], [8, 10]];
-    w.direction = [0, 1];
-    w.castSkill('dragon');
-    w.tickSkills(0.5);
-
-    const y = (lead: number) => w.coilPose(lead).y;
-    const epsilon = 0.001;
-    const verifyJoin = () => {
-        const end = y(1);
-        const before = (end - y(1 - epsilon)) / epsilon;
-        w.step();
-        assert.ok(Math.abs(y(0) - end) < 1e-8);
-        const after = (y(epsilon) - y(0)) / epsilon;
-        assert.ok(before > 0.1 && Math.abs(before - after) < 0.02);
-    };
-    assert.ok(y(0.9) > y(0.6), 'The body must keep moving along the edge approach');
-    verifyJoin();
-
-    const departureSpeed = (y(1) - y(1 - epsilon)) / epsilon;
-    assert.equal(w.coilPose(1).opacity, 0);
-    w.step();
-    assert.equal(w.coilPose(0).opacity, 0);
-    const arrivalSpeed = (y(epsilon) - y(0)) / epsilon;
-    assert.ok(Math.abs(departureSpeed - arrivalSpeed) < 0.02);
-    verifyJoin();
+    const turned = w.coilPose(0);
+    assert.equal(leaving.x + leaving.wrapX, turned.x);
+    assert.equal(leaving.y, turned.y);
+    assert.equal(turned.wrapX, 0);
+    assert.equal(turned.wrapY, 0);
+    assert.equal(w.coilPose(0.75).y, turned.y - 0.75);
+    w.berry = [19, 7];
+    assert.deepEqual(w.tickSkills(0.01), []);
 });
 test('the coiled body can reach fruit in the bottom row before the head does', () => {
     const w = world('zen');

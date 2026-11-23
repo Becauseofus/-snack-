@@ -167,7 +167,7 @@ export class GameApp extends Component {
     private skinFrames = new Map<string, SpriteFrame[]>();
     private dragonNodes: Node[] = [];
     private dragonLayer: Node | null = null;
-    private coilNode: Node | null = null;
+    private coilNodes: Node[] = [];
     private coilFrames: SpriteFrame[] = [];
     private clips = new Map<string, AudioClip>();
     private audio: AudioSource | null = null;
@@ -383,11 +383,14 @@ export class GameApp extends Component {
 
         this.dragonLayer = makeNode('dragon');
         this.fieldNode.addChild(this.dragonLayer);
-        this.coilNode = makeNode('dragon-coil');
-        this.coilNode.active = false;
-        this.coilNode.addComponent(UITransform);
-        this.coilNode.addComponent(Sprite).sizeMode = Sprite.SizeMode.CUSTOM;
-        this.fieldNode.addChild(this.coilNode);
+        for (const name of ['dragon-coil', 'dragon-coil-wrap']) {
+            const node = makeNode(name);
+            node.active = false;
+            node.addComponent(UITransform);
+            node.addComponent(Sprite).sizeMode = Sprite.SizeMode.CUSTOM;
+            this.fieldNode.addChild(node);
+            this.coilNodes.push(node);
+        }
         const skillNode = makeNode('skill-projectiles');
         this.fieldNode.addChild(skillNode);
         this.skillGraphics = skillNode.addComponent(Graphics);
@@ -664,18 +667,21 @@ export class GameApp extends Component {
         const world = this.world;
         const coiled = active && world && this.save.skin === 'dragon' && world.dragonCoilLeft > 0;
         this.dragonLayer!.active = active && !coiled;
-        this.coilNode!.active = !!coiled;
+        if (!coiled) for (const node of this.coilNodes) node.active = false;
         if (!active) return;
         const g = this.grid;
         if (coiled) {
             const pose = world.coilPose(lead);
-            const node = this.coilNode!;
-            node.setPosition(pose.x * g.cell, g.h - pose.y * g.cell);
-            node.angle = Math.atan2(-pose.dy, pose.dx) * 180 / Math.PI - 90;
-            const sprite = node.getComponent(Sprite)!;
-            sprite.spriteFrame = this.coilFrames[pose.frame];
-            sprite.color = new Color(255, 255, 255, pose.opacity);
-            node.getComponent(UITransform)!.setContentSize(pose.size * g.cell, pose.size * g.cell);
+            for (let i = 0; i < this.coilNodes.length; i++) {
+                const node = this.coilNodes[i];
+                node.active = i === 0 || pose.wrapX !== 0 || pose.wrapY !== 0;
+                if (!node.active) continue;
+                const x = pose.x + i * pose.wrapX, y = pose.y + i * pose.wrapY;
+                node.setPosition(x * g.cell, g.h - y * g.cell);
+                node.angle = Math.atan2(-pose.dy, pose.dx) * 180 / Math.PI - 90;
+                node.getComponent(Sprite)!.spriteFrame = this.coilFrames[pose.frame];
+                node.getComponent(UITransform)!.setContentSize(pose.size * g.cell, pose.size * g.cell);
+            }
             return;
         }
         const menu = this.phase === 'menu' || !world;
