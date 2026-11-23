@@ -3,6 +3,20 @@ import { DRAGON_COIL_SECONDS } from './config';
 const COIL_IN_ENDS = [0.160, 0.265, 0.375, 0.500];
 const COIL_OUT_STARTS = [0.540, 0.420, 0.300, 0.160];
 const MASK_SIZE = 24;
+const TILE_SIZE = 448;
+
+// [left, top, right, bottom] in atlas pixels, using alpha >= 48 to exclude faint specks.
+const BODY_BOUNDS = [
+    [141, 28, 306, 420],
+    [92, 59, 355, 388],
+    [62, 81, 385, 366],
+    [91, 94, 356, 354],
+    [93, 98, 356, 351],
+    [75, 89, 374, 358],
+    [73, 70, 374, 376],
+    [115, 38, 332, 410],
+    [142, 28, 307, 420],
+] as const;
 
 // The 24 rows of each mask store the visible pixels of the corresponding atlas tile.
 // Bit 0 is the leftmost column. Transparent padding and holes do not collect balls.
@@ -79,17 +93,26 @@ export function dragonCoilPose(headX: number, headY: number, dx: number, dy: num
     const frame = COIL_IN_ENDS.filter(end => elapsed >= end).length +
         COIL_OUT_STARTS.filter(start => remaining <= start).length;
     const size = Math.min(4, cols, rows);
-    const half = size / 2;
     const extent = 1 - Math.min(1, elapsed / COIL_IN_ENDS[3], remaining / COIL_OUT_STARTS[0]);
     const headOffset = size * 0.29 * extent;
 
-    // Wrap the head first, then fit a single complete pose onto that side of the board.
-    // Wrapping the sprite's centre instead makes the extended pose jump ahead of the head.
-    const fit = (head: number, offset: number, span: number): number => {
+    const [left, top, right, bottom] = BODY_BOUNDS[frame];
+    const scale = size / TILE_SIZE;
+    const centerX = (left + right - TILE_SIZE) * scale / 2;
+    const centerY = (top + bottom - TILE_SIZE) * scale / 2;
+    const halfWidth = (right - left) * scale / 2;
+    const halfHeight = (bottom - top) * scale / 2;
+
+    // Fit the rotated visible body after wrapping the head. The atlas padding can overhang.
+    const fit = (head: number, offset: number, span: number, center: number, half: number): number => {
         const position = wrap ? ((head % span) + span) % span : head;
-        return Math.max(half, Math.min(span - half, position - offset));
+        return Math.max(half - center, Math.min(span - half - center, position - offset));
     };
-    return { x: fit(headX, dx * headOffset, cols), y: fit(headY, dy * headOffset, rows), dx, dy, size, frame };
+    const x = fit(headX, dx * headOffset, cols, -dy * centerX - dx * centerY,
+        Math.abs(dy) * halfWidth + Math.abs(dx) * halfHeight);
+    const y = fit(headY, dy * headOffset, rows, dx * centerX - dy * centerY,
+        Math.abs(dx) * halfWidth + Math.abs(dy) * halfHeight);
+    return { x, y, dx, dy, size, frame };
 }
 
 export function dragonCoilTouches(pose: DragonCoilPose, x: number, y: number, radius: number): boolean {

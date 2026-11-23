@@ -96,6 +96,15 @@ test('the coil ignores transparent padding and never collects across an unbroken
     assert.deepEqual(zen.tickSkills(0.5, 0.49), []);
     assert.equal(zen.tickSkills(0.01, 0.51)[0]?.amount, 10);
 });
+test('the coiled body can reach fruit in the bottom row before the head does', () => {
+    const w = world('zen');
+    w.snake = [[8, 13], [7, 13], [6, 13]];
+    w.direction = [1, 0];
+    w.berry = [9, 13];
+    w.castSkill('dragon');
+    assert.equal(w.tickSkills(0.5)[0]?.amount, 10);
+    assert.deepEqual(w.snake[0], [8, 13]);
+});
 test('spit starts at supplied mouth and chooses a random direction at constant speed', () => {
     const velocities: number[][]=[];
     for(const random of [0,.25,.5,.75]) {

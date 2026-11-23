@@ -109,19 +109,21 @@ console.log('PASS: coiling and uncoiling replace the regular skin for the entire
 
 app.world.dragonCoilLeft = 4;
 const {w, h, cell} = app.grid;
-const half = 2 * cell;
+// The nose and tail bounds of atlas pose 4 are at rows 98 and 351 of 448.
+const leading = (224 - 98) / 448 * 4 * cell;
+const trailing = (351 - 224) / 448 * 4 * cell;
 for (const [head, dir, axis, before, after] of [
-  [[19, 7], [1, 0], 'x', w - half, half],
-  [[0, 7], [-1, 0], 'x', half, w - half],
-  [[8, 0], [0, -1], 'y', h - half, half],
-  [[8, 13], [0, 1], 'y', half, h - half],
+  [[19, 7], [1, 0], 'x', w - leading, trailing],
+  [[0, 7], [-1, 0], 'x', leading, w - trailing],
+  [[8, 0], [0, -1], 'y', h - leading, trailing],
+  [[8, 13], [0, 1], 'y', leading, h - trailing],
 ]) {
   app.world.snake = [head, [head[0] - dir[0], head[1] - dir[1]]];
   app.world.direction = dir;
   app.drawDragon(0.49);
-  assert.equal(app.coilNode[axis], before);
+  assert.ok(Math.abs(app.coilNode[axis] - before) < 1e-8);
   app.drawDragon(0.51);
-  assert.equal(app.coilNode[axis], after);
+  assert.ok(Math.abs(app.coilNode[axis] - after) < 1e-8);
   assert.equal(app.coilNode.active, true);
   assert.equal(app.dragonLayer.active, false);
 }
