@@ -92,6 +92,7 @@ export class SnakeWorld {
     deathFace: Dir = [1, 0];
     deathGrow = false;
     dragonCoilLeft = 0;
+    private coilArrival: Dir | null = null;
     skillCooldowns: Partial<Record<SaveData['skin'], number>> = {};
     spits: Spit[] = [];
 
@@ -126,6 +127,7 @@ export class SnakeWorld {
         this.deathFace = [1, 0];
         this.deathGrow = false;
         this.dragonCoilLeft = 0;
+        this.coilArrival = null;
         this.skillCooldowns = {};
         this.spits = [];
         this.spawnBerry();
@@ -158,6 +160,7 @@ export class SnakeWorld {
         if (skin === 'dragon') {
             if (this.dragonCoilLeft > 0) return false;
             this.dragonCoilLeft = DRAGON_COIL_SECONDS;
+            this.coilArrival = null;
             this.skillCooldowns[skin] = skill.cooldown;
             return true;
         }
@@ -172,9 +175,7 @@ export class SnakeWorld {
     }
 
     coilPose(lead: number): DragonCoilPose {
-        const [x, y] = this.snake[0], [dx, dy] = this.direction;
-        return dragonCoilPose(x + 0.5 + lead * dx, y + 0.5 + lead * dy, dx, dy,
-            this.dragonCoilLeft, this.cols, this.rows, this.mode === 'zen');
+        return dragonCoilPose(this.snake[0], this.direction, this.dragonCoilLeft, this, lead, this.coilArrival);
     }
 
     private collectCoilFood(pose: DragonCoilPose): WorldEvent[] {
@@ -286,6 +287,9 @@ export class SnakeWorld {
         }
         const kind = m.will_eat ? this.kindAt(m.nx, m.ny) : null;
         const events = this.dragonCoilLeft > 0 ? [] : this.collectSpits(this.snake[0], [m.nx, m.ny]);
+        const [x, y] = this.snake[0];
+        const wrapped = m.nx !== x + m.dir[0] || m.ny !== y + m.dir[1];
+        this.coilArrival = this.dragonCoilLeft > 0 && wrapped ? m.dir : null;
         this.snake.unshift([m.nx, m.ny]);
         if (kind) {
             this.award(kind, events, m.nx, m.ny);

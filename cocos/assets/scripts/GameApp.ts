@@ -340,7 +340,7 @@ export class GameApp extends Component {
             this.dieLeft -= d;
             this.acc = 0;
             if (this.dieLeft <= 0) this.enterOver();
-        } else {
+        } else if (!world?.dragonCoilLeft) {
             this.acc = 0;
         }
 
@@ -632,7 +632,9 @@ export class GameApp extends Component {
             this.stars = makeStars(f.w, f.h, f.cols, f.rows);
         }
 
-        const lead = this.phase === 'playing' && this.world ? this.movementLead(this.world) : 0;
+        const world = this.world;
+        const interpolating = this.phase === 'playing' || (this.phase === 'paused' && world?.dragonCoilLeft);
+        const lead = world && interpolating ? this.movementLead(world) : 0;
 
         const out = paintField({
             world: this.phase === 'menu' ? null : this.world,
@@ -670,7 +672,9 @@ export class GameApp extends Component {
             const node = this.coilNode!;
             node.setPosition(pose.x * g.cell, g.h - pose.y * g.cell);
             node.angle = Math.atan2(-pose.dy, pose.dx) * 180 / Math.PI - 90;
-            node.getComponent(Sprite)!.spriteFrame = this.coilFrames[pose.frame];
+            const sprite = node.getComponent(Sprite)!;
+            sprite.spriteFrame = this.coilFrames[pose.frame];
+            sprite.color = new Color(255, 255, 255, pose.opacity);
             node.getComponent(UITransform)!.setContentSize(pose.size * g.cell, pose.size * g.cell);
             return;
         }

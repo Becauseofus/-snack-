@@ -24,7 +24,8 @@ class Node {
   setSiblingIndex() {}
 }
 class Graphics {clear(){} ellipse(){} fill(){}}
-const cc={Node,Sprite,UITransform,Graphics,Component:class{},Color:class{},KeyCode:{SPACE:32,KEY_P:80},Layers:{Enum:{UI_2D:1}},_decorator:{ccclass:()=>c=>c}};
+class Color {constructor(_r, _g, _b, alpha) {this.a = alpha;}}
+const cc={Node,Sprite,UITransform,Graphics,Color,Component:class{},KeyCode:{SPACE:32,KEY_P:80},Layers:{Enum:{UI_2D:1}},_decorator:{ccclass:()=>c=>c}};
 const cache=new Map();
 function load(file) {
   if(cache.has(file)) return cache.get(file);
@@ -107,30 +108,55 @@ assert.equal(app.dragonLayer.active, true);
 assert.equal(app.coilNode.active, false);
 console.log('PASS: coiling and uncoiling replace the regular skin for the entire skill');
 
-app.world.dragonCoilLeft = 4;
 const {w, h, cell} = app.grid;
 // The nose and tail bounds of atlas pose 4 are at rows 98 and 351 of 448.
 const leading = (224 - 98) / 448 * 4 * cell;
-const trailing = (351 - 224) / 448 * 4 * cell;
-for (const [head, dir, axis, before, after] of [
-  [[19, 7], [1, 0], 'x', w - leading, trailing],
-  [[0, 7], [-1, 0], 'x', leading, w - trailing],
-  [[8, 0], [0, -1], 'y', h - leading, trailing],
-  [[8, 13], [0, 1], 'y', leading, h - trailing],
+const coil = app.coilNode;
+const sprite = coil.getComponent(Sprite);
+for (const [head, dir, axis, sign, departureEdge, arrivalEdge] of [
+  [[19, 7], [1, 0], 'x', 1, w, 0],
+  [[0, 7], [-1, 0], 'x', -1, 0, w],
+  [[8, 0], [0, -1], 'y', 1, h, 0],
+  [[8, 13], [0, 1], 'y', -1, 0, h],
 ]) {
+  app.world = new SnakeWorld(20, 14, 'zen', undefined, false);
   app.world.snake = [head, [head[0] - dir[0], head[1] - dir[1]]];
   app.world.direction = dir;
-  app.drawDragon(0.49);
-  assert.ok(Math.abs(app.coilNode[axis] - before) < 1e-8);
-  app.drawDragon(0.51);
-  assert.ok(Math.abs(app.coilNode[axis] - after) < 1e-8);
-  assert.equal(app.coilNode.active, true);
-  assert.equal(app.dragonLayer.active, false);
+  app.world.castSkill('dragon');
+  app.world.dragonCoilLeft = 4;
+  app.drawDragon(0);
+  assert.ok(Math.abs(coil[axis] - (departureEdge - sign * leading)) < 1e-8);
+
+  function verifySlide() {
+    let lastPosition = coil[axis];
+    for (const lead of [0.25, 0.5, 0.75, 0.999]) {
+      app.drawDragon(lead);
+      assert.ok(sign * (coil[axis] - lastPosition) > 0, 'The same sprite moves through each frame');
+      assert.equal(app.coilNode, coil);
+      assert.equal(coil.active, true);
+      assert.equal(app.dragonLayer.active, false);
+      lastPosition = coil[axis];
+    }
+  }
+
+  verifySlide();
+  assert.ok(sign * (coil[axis] - departureEdge) > 0);
+  assert.ok(sprite.color.a <= 2, 'The sprite is nearly hidden before the handoff');
+  app.world.step();
+  app.drawDragon(0);
+  assert.ok(sign * (coil[axis] - arrivalEdge) < 0, 'Arrival begins outside the destination');
+  assert.equal(sprite.color.a, 0);
+  verifySlide();
+  assert.ok(sign * (coil[axis] - arrivalEdge) > 0);
+  assert.equal(sprite.color.a, 255);
 }
 app.phase = 'paused';
+app.acc = 0.04;
+const frozenLead = app.movementLead(app.world);
 const activeTime = app.world.dragonCoilLeft;
 const cooldown = app.world.skillCooldowns.dragon;
 app.update(0.05);
 assert.equal(app.world.dragonCoilLeft, activeTime);
 assert.equal(app.world.skillCooldowns.dragon, cooldown);
-console.log('PASS: one complete coil wraps at all four edges and pauses both timers');
+assert.equal(app.movementLead(app.world), frozenLead);
+console.log('PASS: one sprite slides out and in at all four edges and freezes in place on pause');

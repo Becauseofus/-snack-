@@ -1,4 +1,4 @@
-import { DRAGON_COIL_SECONDS } from './config';
+import { DRAGON_COIL_SECONDS, type Mode } from './config';
 
 const COIL_IN_ENDS = [0.160, 0.265, 0.375, 0.500];
 const COIL_OUT_STARTS = [0.540, 0.420, 0.300, 0.160];
@@ -84,11 +84,13 @@ export interface DragonCoilPose {
     dy: number;
     size: number;
     frame: number;
+    opacity: number;
 }
 
 // World coordinates use cells and measure Y down from the top of the board.
-export function dragonCoilPose(headX: number, headY: number, dx: number, dy: number,
-    remaining: number, cols: number, rows: number, wrap: boolean): DragonCoilPose {
+export function dragonCoilPose([headX, headY]: readonly [number, number], [dx, dy]: readonly [number, number],
+    remaining: number, {cols, rows, mode}: {cols: number; rows: number; mode: Mode}, lead: number,
+    arrival: readonly [number, number] | null): DragonCoilPose {
     const elapsed = DRAGON_COIL_SECONDS - remaining;
     const frame = COIL_IN_ENDS.filter(end => elapsed >= end).length +
         COIL_OUT_STARTS.filter(start => remaining <= start).length;
@@ -103,19 +105,39 @@ export function dragonCoilPose(headX: number, headY: number, dx: number, dy: num
     const halfWidth = (right - left) * scale / 2;
     const halfHeight = (bottom - top) * scale / 2;
 
-    // Fit the rotated visible body after wrapping the head. The atlas padding can overhang.
-    const fit = (head: number, offset: number, span: number, center: number, half: number): number => {
-        const position = wrap ? ((head % span) + span) % span : head;
-        return Math.max(half - center, Math.min(span - half - center, position - offset));
+    const xCenter = -dy * centerX - dx * centerY;
+    const yCenter = dx * centerX - dy * centerY;
+    const xHalf = Math.abs(dy) * halfWidth + Math.abs(dx) * halfHeight;
+    const yHalf = Math.abs(dx) * halfWidth + Math.abs(dy) * halfHeight;
+    const fit = (position: number, span: number, center: number, half: number): number => {
+        return Math.max(half - center, Math.min(span - half - center, position));
     };
-    const x = fit(headX, dx * headOffset, cols, -dy * centerX - dx * centerY,
-        Math.abs(dy) * halfWidth + Math.abs(dx) * halfHeight);
-    const y = fit(headY, dy * headOffset, rows, dx * centerX - dy * centerY,
-        Math.abs(dx) * halfWidth + Math.abs(dy) * halfHeight);
-    return { x, y, dx, dy, size, frame };
+    const pose = {
+        x: fit(headX + 0.5 + dx * (lead - headOffset), cols, xCenter, xHalf),
+        y: fit(headY + 0.5 + dy * (lead - headOffset), rows, yCenter, yHalf),
+        dx, dy, size, frame, opacity: 255,
+    };
+
+    const exits = headX + dx < 0 || headX + dx >= cols || headY + dy < 0 || headY + dy >= rows;
+    if (mode !== 'zen' || (!arrival && !exits)) return pose;
+
+    // The same sprite slides entirely out on the departing step, then slides in on the next.
+    // Swap sides only at the cell step, when the sprite is hidden. The field mask trims the edge.
+    const outside = arrival ? 1 - lead : lead;
+    const [sideX, sideY] = arrival ? [-arrival[0], -arrival[1]] : [dx, dy];
+    const slide = (position: number, span: number, side: number, center: number, half: number): number => {
+        const hidden = (side > 0 ? span : 0) + side * half - center;
+        return position + (hidden - position) * outside;
+    };
+    if (sideX) pose.x = slide(pose.x, cols, sideX, xCenter, xHalf);
+    if (sideY) pose.y = slide(pose.y, rows, sideY, yCenter, yHalf);
+    // Fade the faint atlas fringe near the handoff, after most of the sprite has slid off.
+    pose.opacity = Math.round(255 * Math.min(1, (1 - outside) * 6));
+    return pose;
 }
 
 export function dragonCoilTouches(pose: DragonCoilPose, x: number, y: number, radius: number): boolean {
+    if (pose.opacity === 0) return false;
     const rx = x - pose.x, ry = y - pose.y;
     const half = pose.size / 2;
     const localX = half - pose.dy * rx + pose.dx * ry;

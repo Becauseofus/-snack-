@@ -93,8 +93,26 @@ test('the coil ignores transparent padding and never collects across an unbroken
     zen.snake = [[19, 7], [18, 7], [17, 7]];
     zen.berry = [1, 7];
     zen.castSkill('dragon');
-    assert.deepEqual(zen.tickSkills(0.5, 0.49), []);
-    assert.equal(zen.tickSkills(0.01, 0.51)[0]?.amount, 10);
+    assert.deepEqual(zen.tickSkills(0.5, 0.99), []);
+    zen.step();
+    assert.deepEqual(zen.tickSkills(0.01, 0), []);
+    assert.equal(zen.tickSkills(0.01, 0.85)[0]?.amount, 10);
+});
+test('a turn queued at a seam preserves the arrival edge for the coiled sprite', () => {
+    const w = world('zen');
+    w.snake = [[19, 7], [18, 7], [17, 7]];
+    w.castSkill('dragon');
+    w.tickSkills(0.5);
+    assert.equal(w.turn(0, -1), true);
+    w.step();
+    assert.deepEqual(w.snake[0], [0, 7]);
+    assert.deepEqual(w.direction, [0, -1]);
+    const hidden = w.coilPose(0), entering = w.coilPose(0.75);
+    assert.equal(hidden.opacity, 0);
+    assert.ok(hidden.x < 0 && entering.x > hidden.x && entering.y < hidden.y);
+    w.step();
+    assert.equal(w.coilPose(0).opacity, 255);
+    assert.ok(w.coilPose(0).x > 0);
 });
 test('the coiled body can reach fruit in the bottom row before the head does', () => {
     const w = world('zen');
