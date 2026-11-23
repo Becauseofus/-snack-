@@ -122,6 +122,7 @@ export interface SaveData {
 export const DRAGON_COIL_SECONDS = 7;
 
 export const SKIN_SKILLS: Partial<Record<SaveData['skin'], { name: string; cooldown: number }>> = {
+    dragon: { name: '盘身', cooldown: 30 },
     dufaxing: { name: '吐痰', cooldown: 20 },
 };
 

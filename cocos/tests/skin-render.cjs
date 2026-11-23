@@ -86,21 +86,49 @@ console.log('PASS: Space casts without pausing; P pauses; menus freeze skills');
 app.settingsOpen = false;
 app.save.skin = 'dragon';
 app.dragonLayer = new Node('dragon');
-app.coilLayer = new Node('dragon-coil');
+app.coilNode = new Node('dragon-coil');
+app.coilNode.addComponent(UITransform);
+app.coilNode.addComponent(Sprite).sizeMode = Sprite.SizeMode.CUSTOM;
 app.coilFrames = Array.from({length: 9}, () => ({rect: {width: 448, height: 448}}));
 app.drawDragon(0);
 assert.equal(app.dragonLayer.active, true);
-assert.equal(app.coilLayer.active, false);
+assert.equal(app.coilNode.active, false);
 app.onKey({keyCode: 32});
 for (const [remaining, index] of [[7, 0], [6.8, 1], [4, 4], [0.1, 8]]) {
   app.world.dragonCoilLeft = remaining;
   app.drawDragon(0);
   assert.equal(app.dragonLayer.active, false, 'The ordinary skin must not overlap the coil');
-  assert.equal(app.coilLayer.active, true);
-  assert.equal(app.coilLayer.children[0].getComponent(Sprite).frame, app.coilFrames[index]);
+  assert.equal(app.coilNode.active, true);
+  assert.equal(app.coilNode.getComponent(Sprite).frame, app.coilFrames[index]);
 }
 app.world.tickSkills(0.1);
 app.drawDragon(0);
 assert.equal(app.dragonLayer.active, true);
-assert.equal(app.coilLayer.active, false);
+assert.equal(app.coilNode.active, false);
 console.log('PASS: coiling and uncoiling replace the regular skin for the entire skill');
+
+app.world.dragonCoilLeft = 4;
+const {w, h, cell} = app.grid;
+const half = 2 * cell;
+for (const [head, dir, axis, before, after] of [
+  [[19, 7], [1, 0], 'x', w - half, half],
+  [[0, 7], [-1, 0], 'x', half, w - half],
+  [[8, 0], [0, -1], 'y', h - half, half],
+  [[8, 13], [0, 1], 'y', half, h - half],
+]) {
+  app.world.snake = [head, [head[0] - dir[0], head[1] - dir[1]]];
+  app.world.direction = dir;
+  app.drawDragon(0.49);
+  assert.equal(app.coilNode[axis], before);
+  app.drawDragon(0.51);
+  assert.equal(app.coilNode[axis], after);
+  assert.equal(app.coilNode.active, true);
+  assert.equal(app.dragonLayer.active, false);
+}
+app.phase = 'paused';
+const activeTime = app.world.dragonCoilLeft;
+const cooldown = app.world.skillCooldowns.dragon;
+app.update(0.05);
+assert.equal(app.world.dragonCoilLeft, activeTime);
+assert.equal(app.world.skillCooldowns.dragon, cooldown);
+console.log('PASS: one complete coil wraps at all four edges and pauses both timers');

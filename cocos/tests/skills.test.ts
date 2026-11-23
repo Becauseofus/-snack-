@@ -43,7 +43,9 @@ test('dragon coil lasts seven seconds and preserves turns, growth and challenge 
             w.step();
             w.tickSkills(0.25);
         }
-        assert.deepEqual(coiled.snake, control.snake);
+        assert.deepEqual(coiled.snake[0], control.snake[0]);
+        assert.equal(coiled.snake.length + coiled.pendingGrow, control.snake.length);
+        assert.equal(coiled.score, control.score);
         assert.equal(intervalMs(5, coiled.mode, coiled.eaten, coiled.slowLeft),
             intervalMs(5, control.mode, control.eaten, control.slowLeft));
     }
@@ -54,9 +56,45 @@ test('dragon coil lasts seven seconds and preserves turns, growth and challenge 
     assert.ok(coiled.dragonCoilLeft > 0);
     coiled.tickSkills(1 / 60);
     assert.equal(coiled.dragonCoilLeft, 0);
+    assert.ok(Math.abs(coiled.skillCooldowns.dragon! - 23) < 1e-9);
+    coiled.tickSkills(22.99);
+    assert.equal(coiled.castSkill('dragon'), false);
+    coiled.tickSkills(0.01);
     assert.equal(coiled.castSkill('dragon'), true);
     coiled.reset();
     assert.equal(coiled.dragonCoilLeft, 0);
+    assert.equal(coiled.castSkill('dragon'), true);
+});
+test('coiled body collects fruit and balls outside the head cell once', () => {
+    const w = world();
+    const [hx, hy] = w.snake[0];
+    const length = w.snake.length;
+    w.berry = [hx, hy - 1];
+    w.special = {x: hx, y: hy + 1, kind: 'star', ttl: 9};
+    w.spits = [{x: hx + 1, y: hy + 1, vx: 0, vy: 0, armed: true}];
+    w.castSkill('dragon');
+    const events = w.tickSkills(0.5);
+    assert.deepEqual(events.map(e => e.amount), [10, 30, 40]);
+    assert.equal(w.pendingGrow, 3);
+    assert.equal(w.eaten, 2);
+    assert.deepEqual(w.tickSkills(0.01), []);
+    for (let i = 0; i < 3; i++) w.step();
+    assert.equal(w.snake.length, length + 3);
+    assert.equal(w.pendingGrow, 0);
+});
+test('the coil ignores transparent padding and never collects across an unbroken seam', () => {
+    const clear = world();
+    const [hx, hy] = clear.snake[0];
+    clear.berry = [hx - 2, hy - 1];
+    clear.castSkill('dragon');
+    assert.deepEqual(clear.tickSkills(0.01), []);
+
+    const zen = world('zen');
+    zen.snake = [[19, 7], [18, 7], [17, 7]];
+    zen.berry = [1, 7];
+    zen.castSkill('dragon');
+    assert.deepEqual(zen.tickSkills(0.5, 0.49), []);
+    assert.equal(zen.tickSkills(0.01, 0.51)[0]?.amount, 10);
 });
 test('spit starts at supplied mouth and chooses a random direction at constant speed', () => {
     const velocities: number[][]=[];

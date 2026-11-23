@@ -14,12 +14,12 @@ let bundle = fs.readFileSync(target,'utf8');
 for (const file of ['GameApp.ts', ...fs.readdirSync('cocos/assets/scripts/logic').filter(n=>n.endsWith('.ts')).map(n=>'logic/'+n)]) {
   const name = path.basename(file);
   const marker = 'System.register("chunks:///_virtual/'+name+'"';
-  const start = bundle.indexOf(marker);
-  if(start<0) throw Error('Missing source module '+name);
-  let end=bundle.indexOf('System.register(',start+marker.length);
-  const bootstrap=bundle.indexOf('(function(r)',start+marker.length);
-  if(bootstrap>=0 && (end<0 || bootstrap<end)) end=bootstrap;
-  if(end<0) throw Error('Missing module boundary '+name);
+  const bootstrap=bundle.lastIndexOf('(function(r)');
+  if(bootstrap<0) throw Error('Missing bundle bootstrap');
+  const existing = bundle.indexOf(marker);
+  const start = existing < 0 ? bootstrap : existing;
+  const next = existing < 0 ? -1 : bundle.indexOf('System.register(',start+marker.length);
+  const end = next < 0 ? bootstrap : Math.min(next, bootstrap);
   let src=fs.readFileSync('cocos/assets/scripts/'+file,'utf8');
   if(name==='GameApp.ts') {
     src="import {cclegacy} from 'cc';\n"+src;

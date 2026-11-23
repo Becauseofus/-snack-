@@ -456,7 +456,7 @@ function helpTab(labels: LabelSpec[], buttons: ButtonSpec[], m: UiModel, c: Ctx)
     let y = c.y;
     for (let i = 0; i < HELP_ROWS.length && i < rows; i++) {
         const [key, description] = HELP_ROWS[i];
-        const val = key === '空格' && m.skin === 'dragon' ? '盘身 7 秒，期间可移动和转向' : description;
+        const val = key === '空格' && m.skin === 'dragon' ? '盘身 7 秒，龙身可吃球，冷却 30 秒' : description;
         const isFood = key === '浆果 +10' || key === '时砂 慢动作' || key === '吐痰 · 20秒';
         const modeIndex = ['经典', '禅意', '挑战'].indexOf(key);
         const isMode = modeIndex >= 0;

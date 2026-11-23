@@ -1,6 +1,7 @@
 /** 格子规则。画面插值不在这里做。与 Python 版 SnakeWorld 对齐。 */
 
 import { DRAGON_COIL_SECONDS, FOOD_SCORE, type FoodKind, type Mode, MODES, SKIN_SKILLS, type SaveData } from './config';
+import { dragonCoilPose, dragonCoilTouches, type DragonCoilPose } from './dragonCoil';
 
 export type Cell = [number, number];
 export type Dir = [number, number];
@@ -152,13 +153,14 @@ export class SnakeWorld {
 
     castSkill(skin: SaveData['skin'], mouth?: Cell): boolean {
         if (!this.alive || this.won) return false;
+        const skill = SKIN_SKILLS[skin];
+        if (!skill || (this.skillCooldowns[skin] ?? 0) > 0) return false;
         if (skin === 'dragon') {
             if (this.dragonCoilLeft > 0) return false;
             this.dragonCoilLeft = DRAGON_COIL_SECONDS;
+            this.skillCooldowns[skin] = skill.cooldown;
             return true;
         }
-        const skill = SKIN_SKILLS[skin];
-        if (!skill || (this.skillCooldowns[skin] ?? 0) > 0) return false;
         if (skin !== 'dufaxing') return false;
         const [mx, my] = mouth ?? this.snake[0];
         const x = Math.max(-0.2, Math.min(this.cols - 0.8, mx));
@@ -169,7 +171,28 @@ export class SnakeWorld {
         return true;
     }
 
-    private collectSpits(from: Cell, to: Cell): WorldEvent[] {
+    coilPose(lead: number): DragonCoilPose {
+        const [x, y] = this.snake[0], [dx, dy] = this.direction;
+        return dragonCoilPose(x + 0.5 + lead * dx, y + 0.5 + lead * dy, dx, dy,
+            this.dragonCoilLeft, this.cols, this.rows, this.mode === 'zen');
+    }
+
+    private collectCoilFood(pose: DragonCoilPose): WorldEvent[] {
+        const events: WorldEvent[] = [];
+        const berry = this.berry;
+        if (berry && dragonCoilTouches(pose, berry[0] + 0.5, berry[1] + 0.5, 0.3)) {
+            this.award('berry', events, berry[0], berry[1]);
+            this.pendingGrow += 1;
+        }
+        const special = this.special;
+        if (special && dragonCoilTouches(pose, special.x + 0.5, special.y + 0.5, special.kind === 'star' ? 0.405 : 0.3)) {
+            this.award(special.kind, events, special.x, special.y);
+            this.pendingGrow += special.kind === 'star' ? 2 : 1;
+        }
+        return events;
+    }
+
+    private collectSpits(from: Cell, to: Cell, pose: DragonCoilPose | null = null): WorldEvent[] {
         const events: WorldEvent[] = [];
         // A zen wrap crosses two edges, never the whole middle of the board.
         const wrapped = Math.abs(to[0]-from[0]) > 1 || Math.abs(to[1]-from[1]) > 1;
@@ -181,7 +204,8 @@ export class SnakeWorld {
             }
             const t = dx*dx+dy*dy ? Math.max(0,Math.min(1,((p.x-from[0])*dx+(p.y-from[1])*dy)/(dx*dx+dy*dy))) : 0;
             const x = wrapped ? to[0] : from[0]+t*dx, y = wrapped ? to[1] : from[1]+t*dy;
-            if (Math.hypot(p.x-x,p.y-y) > 0.55) return true;
+            const hit = pose ? dragonCoilTouches(pose, p.x + 0.5, p.y + 0.5, 0.3) : Math.hypot(p.x-x,p.y-y) <= 0.55;
+            if (!hit) return true;
             this.score += 40; // Fixed skill reward: no multiplier, growth, or speed change.
             events.push({type:'skill-eat',x:p.x,y:p.y,amount:40});
             return false;
@@ -189,14 +213,17 @@ export class SnakeWorld {
         return events;
     }
 
-    tickSkills(dt: number): WorldEvent[] {
+    tickSkills(dt: number, lead = 0): WorldEvent[] {
         if (!this.alive || this.won || !Number.isFinite(dt) || dt <= 0) return [];
         // Repeated frame deltas can leave a rounding residue at the exact end time.
         this.dragonCoilLeft = this.dragonCoilLeft <= dt + 1e-9 ? 0 : this.dragonCoilLeft - dt;
         for (const skin of Object.keys(this.skillCooldowns) as SaveData['skin'][]) {
-            this.skillCooldowns[skin] = Math.max(0, this.skillCooldowns[skin]! - dt);
+            const left = this.skillCooldowns[skin]! - dt;
+            this.skillCooldowns[skin] = left <= 1e-9 ? 0 : left;
         }
-        const events: WorldEvent[] = [];
+        const pose = this.dragonCoilLeft > 0 ? this.coilPose(lead) : null;
+        const events = pose ? this.collectCoilFood(pose) : [];
+        if (!this.spits.length) return events;
         // Small substeps prevent a moving ball from passing through the head.
         const count = Math.ceil(dt / 0.05), step = dt / count;
         for (let i=0;i<count;i++) {
@@ -208,7 +235,7 @@ export class SnakeWorld {
                 if(p.y < -0.2) {p.y=-0.4-p.y;p.vy=Math.abs(p.vy);}
                 if(p.y > ymax) {p.y=2*ymax-p.y;p.vy=-Math.abs(p.vy);}
             }
-            events.push(...this.collectSpits(this.snake[0],this.snake[0]));
+            events.push(...this.collectSpits(this.snake[0],this.snake[0],pose));
         }
         return events;
     }
@@ -232,7 +259,7 @@ export class SnakeWorld {
         } else {
             outside = !(nx >= 0 && nx < this.cols && ny >= 0 && ny < this.rows);
         }
-        const willEat = !outside && this.kindAt(nx, ny) !== null;
+        const willEat = !outside && this.dragonCoilLeft === 0 && this.kindAt(nx, ny) !== null;
         const willGrow = !outside && (willEat || this.pendingGrow > 0);
         let fatal = outside;
         if (!outside) {
@@ -257,8 +284,8 @@ export class SnakeWorld {
             this.deathGrow = m.will_grow;
             return [{ type: 'die', x: m.nx, y: m.ny }];
         }
-        const kind = this.kindAt(m.nx, m.ny);
-        const events = this.collectSpits(this.snake[0], [m.nx, m.ny]);
+        const kind = m.will_eat ? this.kindAt(m.nx, m.ny) : null;
+        const events = this.dragonCoilLeft > 0 ? [] : this.collectSpits(this.snake[0], [m.nx, m.ny]);
         this.snake.unshift([m.nx, m.ny]);
         if (kind) {
             this.award(kind, events, m.nx, m.ny);
@@ -273,8 +300,6 @@ export class SnakeWorld {
         this.consumeTurn();
         if (this.berry === null && !this.won) {
             this.spawnBerry();
-        }
-        if (kind === 'berry' && !this.won && this.special === null) {
             this.maybeSpecial();
         }
         if (this.won) {
