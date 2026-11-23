@@ -114,6 +114,34 @@ test('a turn queued at a seam preserves the arrival edge for the coiled sprite',
     assert.equal(w.coilPose(0).opacity, 255);
     assert.ok(w.coilPose(0).x > 0);
 });
+test('the coil keeps moving between the approach, exit, arrival and normal travel', () => {
+    const w = world('zen');
+    w.snake = [[8, 12], [8, 11], [8, 10]];
+    w.direction = [0, 1];
+    w.castSkill('dragon');
+    w.tickSkills(0.5);
+
+    const y = (lead: number) => w.coilPose(lead).y;
+    const epsilon = 0.001;
+    const verifyJoin = () => {
+        const end = y(1);
+        const before = (end - y(1 - epsilon)) / epsilon;
+        w.step();
+        assert.ok(Math.abs(y(0) - end) < 1e-8);
+        const after = (y(epsilon) - y(0)) / epsilon;
+        assert.ok(before > 0.1 && Math.abs(before - after) < 0.02);
+    };
+    assert.ok(y(0.9) > y(0.6), 'The body must keep moving along the edge approach');
+    verifyJoin();
+
+    const departureSpeed = (y(1) - y(1 - epsilon)) / epsilon;
+    assert.equal(w.coilPose(1).opacity, 0);
+    w.step();
+    assert.equal(w.coilPose(0).opacity, 0);
+    const arrivalSpeed = (y(epsilon) - y(0)) / epsilon;
+    assert.ok(Math.abs(departureSpeed - arrivalSpeed) < 0.02);
+    verifyJoin();
+});
 test('the coiled body can reach fruit in the bottom row before the head does', () => {
     const w = world('zen');
     w.snake = [[8, 13], [7, 13], [6, 13]];

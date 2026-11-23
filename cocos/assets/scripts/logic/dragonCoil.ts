@@ -87,6 +87,37 @@ export interface DragonCoilPose {
     opacity: number;
 }
 
+function fitTravellingCoil(head: number, offset: number, span: number, min: number, max: number) {
+    const range = span - 1;
+    const position = Math.max(0.5, Math.min(span - 0.5, head));
+    const nearStart = position < span / 2;
+    const edge = nearStart ? 0.5 : span - 0.5;
+    const ideal = edge + offset;
+    const adjustment = Math.max(min, Math.min(max, ideal)) - ideal;
+    const distance = Math.abs(position - edge);
+    const zone = Math.min(range / 2, Math.max(2, 2.5 * Math.abs(adjustment)));
+    if (!adjustment || distance >= zone) return { center: position + offset, speed: 1 };
+
+    // Spread the correction across the approach, before the art would otherwise hit a hard clamp.
+    const compression = Math.abs(adjustment) / zone;
+    if (compression >= 1) {
+        const speed = (max - min) / range;
+        return { center: min + (position - 0.5) * speed, speed };
+    }
+    const t = 1 - distance / zone;
+    const quadratic = Math.max(0, Math.min(1, 0.9 / compression - 1));
+    return {
+        center: position + offset + adjustment * t * (1 - quadratic + quadratic * t),
+        speed: 1 - compression * (1 - quadratic + 2 * quadratic * t),
+    };
+}
+
+function slideCoil(from: number, to: number, startSpeed: number, endSpeed: number, t: number): number {
+    const rest = 1 - t;
+    return from + (to - from) * t * t * (3 - 2 * t) +
+        startSpeed * t * rest * rest - endSpeed * t * t * rest;
+}
+
 // World coordinates use cells and measure Y down from the top of the board.
 export function dragonCoilPose([headX, headY]: readonly [number, number], [dx, dy]: readonly [number, number],
     remaining: number, {cols, rows, mode}: {cols: number; rows: number; mode: Mode}, lead: number,
@@ -109,31 +140,34 @@ export function dragonCoilPose([headX, headY]: readonly [number, number], [dx, d
     const yCenter = dx * centerX - dy * centerY;
     const xHalf = Math.abs(dy) * halfWidth + Math.abs(dx) * halfHeight;
     const yHalf = Math.abs(dx) * halfWidth + Math.abs(dy) * halfHeight;
-    const fit = (position: number, span: number, center: number, half: number): number => {
-        return Math.max(half - center, Math.min(span - half - center, position));
-    };
-    const pose = {
-        x: fit(headX + 0.5 + dx * (lead - headOffset), cols, xCenter, xHalf),
-        y: fit(headY + 0.5 + dy * (lead - headOffset), rows, yCenter, yHalf),
-        dx, dy, size, frame, opacity: 255,
-    };
+    const wraps = mode === 'zen';
+    const exitX = wraps && (headX + dx < 0 || headX + dx >= cols);
+    const exitY = wraps && (headY + dy < 0 || headY + dy >= rows);
+    const place = (head: number, dir: number, span: number, center: number, half: number,
+        entry: number, exits: boolean): number => {
+        const min = half - center, max = span - half - center;
+        const offset = -dir * headOffset;
+        const fit = (at: number) => {
+            if (wraps && dir && span > 1) return fitTravellingCoil(head + 0.5 + dir * at, offset, span, min, max);
+            return { center: Math.max(min, Math.min(max, head + 0.5 + dir * at + offset)), speed: 0 };
+        };
+        if (!entry && !exits) return fit(lead).center;
 
-    const exits = headX + dx < 0 || headX + dx >= cols || headY + dy < 0 || headY + dy >= rows;
-    if (mode !== 'zen' || (!arrival && !exits)) return pose;
-
-    // The same sprite slides entirely out on the departing step, then slides in on the next.
-    // Swap sides only at the cell step, when the sprite is hidden. The field mask trims the edge.
-    const outside = arrival ? 1 - lead : lead;
-    const [sideX, sideY] = arrival ? [-arrival[0], -arrival[1]] : [dx, dy];
-    const slide = (position: number, span: number, side: number, center: number, half: number): number => {
-        const hidden = (side > 0 ? span : 0) + side * half - center;
-        return position + (hidden - position) * outside;
+        // Match the speed at the visible ends of each slide. Only switch sides while invisible.
+        const travel = entry || dir;
+        const side = entry ? -entry : dir;
+        const hidden = side > 0 ? max + 2 * half : min - 2 * half;
+        const transitSpeed = travel * 2.7 * half;
+        const inside = fit(entry ? 1 : 0);
+        return entry
+            ? slideCoil(hidden, inside.center, transitSpeed, dir * inside.speed, lead)
+            : slideCoil(inside.center, hidden, dir * inside.speed, transitSpeed, lead);
     };
-    if (sideX) pose.x = slide(pose.x, cols, sideX, xCenter, xHalf);
-    if (sideY) pose.y = slide(pose.y, rows, sideY, yCenter, yHalf);
+    const x = place(headX, dx, cols, xCenter, xHalf, arrival?.[0] ?? 0, exitX);
+    const y = place(headY, dy, rows, yCenter, yHalf, arrival?.[1] ?? 0, exitY);
     // Fade the faint atlas fringe near the handoff, after most of the sprite has slid off.
-    pose.opacity = Math.round(255 * Math.min(1, (1 - outside) * 6));
-    return pose;
+    const opacity = Math.round(255 * Math.min(1, arrival ? lead * 6 : 1, exitX || exitY ? (1 - lead) * 6 : 1));
+    return { x, y, dx, dy, size, frame, opacity };
 }
 
 export function dragonCoilTouches(pose: DragonCoilPose, x: number, y: number, radius: number): boolean {
